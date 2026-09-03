@@ -1,6 +1,6 @@
 # my-skills-skill
 
-一个交给 Agent 执行的个人 Skill 管理器。它使用 `skillset.json` 保存经过审核的常用 Skill，让你在新环境中通过自然语言完成检查、规划、初始化和审计。
+一个交给 Agent 执行的个人 Skill 管理器。它使用 `skillset.json` 保存经过审核的常用 Skill，让你通过自然语言完成检查、规划、环境同步、版本更新和审计。
 
 ## 安装
 
@@ -26,42 +26,46 @@ npx skills add <your-github-user>/my-skills-skill --skill my-skills-skill --glob
 从 <your-github-user>/my-skills-skill 安装 my-skills-skill 为全局 Skill。
 ```
 一般会使用Agent自带的skill installer 安装本skill。
-安装完成后开启新会话，再使用下方 Prompt 初始化或审计环境。
+安装完成后开启新会话，再使用下方 Prompt 同步或审计环境。
 
 ## 推荐 Prompt
 
-### 初始化全新环境
+### 初始化我的 Skill（默认 Profile）
 
 ```text
-使用 $my-skills-skill 初始化这个全新环境。
+使用 $my-skills-skill 初始化我的 Skill。
 ```
 
-当前默认 Profile 是 `core`。
-
-### 初始化全部 Profile
-
 ```text
-使用 $my-skills-skill 初始化全部的 Profile。
+使用 $my-skills-skill 同步我的 Skill。
 ```
 
-Agent 会自动选择 `skillset.json` 中当前声明的所有 Profile，无需在 Prompt 中逐一列出。
+“初始化”是自然语言别名，Agent 实际执行无选择器的 `sync`，严格使用 `defaultProfiles`。当前默认 Profile 是 `core`。
 
-### 选择部分 Profile
+### 同步全部兼容 Profile
 
 ```text
-使用 $my-skills-skill 初始化 core 和 coding Profile。
+使用 $my-skills-skill 同步全部 Profile。
+```
+
+Agent 会选择所有普通 Profile，以及每个互斥组中配置的默认 Profile，无需逐一列出。
+
+### 同步到指定 Profile
+
+```text
+使用 $my-skills-skill 将当前环境同步到 core 和 coding2 Profile。
 ```
 
 ### 只查看计划
 
 ```text
-使用 $my-skills-skill 查看全部 Profile 的初始化计划。
+使用 $my-skills-skill 查看同步到 core 和 coding2 Profile 的计划，不执行修改。
 ```
 
-### 审计当前环境
+### 审计指定 Profile 环境
 
 ```text
-使用 $my-skills-skill 审计当前环境。
+使用 $my-skills-skill 审计当前 coding2 Profile 环境。
 ```
 
 ### 查找新的 Skill
@@ -107,11 +111,13 @@ scope=<global|project>，agents=detected，required=<true|false>。
 使用 $my-skills-skill 将 ./path/to/local-skill 的 <skill-name> 记录为本地来源。
 ```
 
-### 更新已安装 Skill
+### 更新已安装 Skill 的版本
 
 ```text
-使用 $my-skills-skill 更新受管 Skill。
+使用 $my-skills-skill 更新我的 Skill。
 ```
+
+“更新”只升级已安装受管 Skill 的版本，不执行 Profile 同步或互斥清理。
 
 ### 从配置移除但保留本机安装
 
@@ -128,13 +134,14 @@ scope=<global|project>，agents=detected，required=<true|false>。
 收到 Prompt 后，Agent 会根据请求选择以下操作：
 
 1. 检查 Node.js、Git、Skills CLI、配置和当前 Agent。
-2. 将 `skillset.json` 与当前安装状态对比。
-3. 在任何安装或更新前展示计划并等待确认。
+2. 将 `skillset.json` 与当前安装状态对比，生成安装与互斥清理计划。
+3. 在任何安装或版本更新前展示计划并等待确认。
 4. 将同来源、同 scope、同目标 Agent、同失败策略的缺失项合并安装。
-5. 安装后审计缺失项、链接问题和未纳管项。
-6. 导出前交叉检查 CLI 元数据、lock 记录和本地 Git 证据，并展示可信等级。
+5. 安装全部成功后，清理当前目标 Agent 中被替代 Profile 的专属 Skill，并验证删除结果。
+6. 审计缺失项、互斥冲突、链接问题和未纳管项。
+7. 导出前交叉检查 CLI 元数据、lock 记录和本地 Git 证据，并展示可信等级。
 
-只读操作不会改变安装状态。初始化和更新属于修改操作，Agent 必须先获得确认。
+只读操作不会改变安装状态。同步和版本更新属于修改操作；同步清理不增加独立确认，只有清理动作时，显式同步请求本身就是授权。
 
 ## 关键行为
 
@@ -144,6 +151,7 @@ scope=<global|project>，agents=detected，required=<true|false>。
 
 - 来源（远程仓库或本机路径）和准确 Skill 名称
 - 所属 Profile
+- 可选的 Profile 互斥组及组内默认项
 - `global` 或 `project` scope
 - 目标 Agent
 - 是否为必需项
@@ -152,6 +160,8 @@ scope=<global|project>，agents=detected，required=<true|false>。
 `skills-lock.json` 不是本项目的人工配置源；它只是 Skills CLI 可能使用的项目级状态。
 
 配置格式详见 [references/configuration.md](references/configuration.md)。
+
+同一 `exclusiveGroup` 中的 Profile 不能同时同步。每个互斥组必须至少包含两个 Profile，并通过 `defaultInExclusiveGroup: true` 指定唯一默认项。`sync --all` 使用该默认项；同步成功后只清理当前目标 Agent 中由其它组成员专属管理的远程 Skill。共享、非冲突、未纳管和本地来源 Skill 均保留。
 
 ### 来源确认与导出门槛
 
@@ -176,10 +186,10 @@ scope=<global|project>，agents=detected，required=<true|false>。
 ## 安全边界
 
 - 未经审核的条目不会安装。
-- 未经确认不会开始安装或更新。
+- 未经确认不会开始安装或版本更新；清理不增加第二次确认。
 - 未纳管 Skill 只报告，不自动删除或加入配置。
 - 不管理系统内置 Skill、插件缓存、凭据或系统依赖。
-- 不因初始化而自动卸载任何 Skill。
+- 不自动删除共享、非冲突或本地来源 Skill。
 - 本地修改可能被覆盖时，Agent 应停止并报告冲突。
 
 完整操作规则见 [references/operations.md](references/operations.md)。

@@ -6,9 +6,13 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  applySyncPlan,
   assessProvenance,
+  buildAuditFindings,
+  buildCleanupPlan,
   buildInstallBatches,
   buildPlan,
+  buildRemovalBatches,
   installArgs,
   inspectGitProvenance,
   isExcludedInstalledPath,
@@ -18,8 +22,19 @@ import {
   parseArgs,
   parseSkillLock,
   remoteListContainsSkill,
+  removeArgs,
   selectProfiles,
+  validateCatalog,
 } from "./manage-skills.mjs";
+
+function catalogWithProfiles(profiles, defaultProfiles = [Object.keys(profiles)[0]]) {
+  return {
+    schemaVersion: 1,
+    defaultProfiles,
+    profiles,
+    skills: [],
+  };
+}
 
 function action(name, overrides = {}) {
   return {
@@ -107,16 +122,16 @@ test("plans local sources as skipped without requiring review or installation", 
   ]);
 });
 
-test("current catalog reduces 9 skills to 8 installation batches", async () => {
+test("current catalog groups each multi-skill source into one installation batch", async () => {
   const catalog = JSON.parse(await readFile(new URL("../skillset.json", import.meta.url), "utf8"));
   const actions = catalog.skills.flatMap((entry) =>
     entry.names.map((name) => ({ action: "install", skill: { ...entry, name } })),
   );
   const batches = buildInstallBatches(actions, ["codex"]);
 
-  assert.equal(actions.length, 9);
-  assert.equal(batches.length, 8);
+  assert.ok(batches.length < actions.length);
   assert.equal(batches.find((batch) => batch.package === "mattpocock/skills").names.length, 2);
+  assert.equal(batches.find((batch) => batch.package === "obra/superpowers").names.length, 14);
 });
 
 test("normalizes common GitHub source forms to one identity", () => {
@@ -274,17 +289,363 @@ test("sources stays offline unless remote verification is explicit", () => {
   assert.equal(parseArgs(["sources", "grill-me", "--verify-remote"]).verifyRemote, true);
 });
 
-test("selects every configured profile without listing profile names", () => {
+test("selects every compatible profile without listing profile names", () => {
   const catalog = {
     defaultProfiles: ["core"],
     profiles: { core: {}, coding: {}, docs: {} },
   };
 
   assert.deepEqual(selectProfiles(catalog, null, true), ["core", "coding", "docs"]);
-  assert.equal(parseArgs(["init", "--all"]).allProfiles, true);
+  assert.equal(parseArgs(["sync", "--all"]).allProfiles, true);
   assert.throws(
-    () => parseArgs(["init", "--all", "--profile", "core"]),
+    () => parseArgs(["sync", "--all", "--profile", "core"]),
     /cannot be combined/,
+  );
+});
+
+test("merges and stably deduplicates repeated profile options", () => {
+  assert.deepEqual(
+    parseArgs(["sync", "--profile", "core,coding", "--profile", "coding,docs"]).profiles,
+    ["core", "coding", "docs"],
+  );
+});
+
+test("plans cleanup only for installed skills exclusive to displaced profiles", () => {
+  const catalog = validateCatalog({
+    ...catalogWithProfiles({
+      core: {},
+      coding1: { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+      coding2: { exclusiveGroup: "coding" },
+      docs: {},
+    }),
+    skills: [
+      { package: "owner/old", names: ["old-only"], profiles: ["coding1"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/shared", names: ["shared"], profiles: ["coding1", "coding2"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/cross", names: ["cross-profile"], profiles: ["coding1", "docs"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "./local", names: ["local-old"], profiles: ["coding1"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/new", names: ["new-only"], profiles: ["coding2"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+    ],
+  });
+  const installed = [
+    { name: "old-only", scope: "global", agents: ["Codex"] },
+    { name: "shared", scope: "global", agents: ["Codex"] },
+    { name: "cross-profile", scope: "global", agents: ["Codex"] },
+    { name: "local-old", scope: "global", agents: ["Codex"] },
+    { name: "unmanaged", scope: "global", agents: ["Codex"] },
+  ];
+
+  assert.deepEqual(
+    buildCleanupPlan(catalog, ["coding2"], installed, ["codex"]).map((item) => [item.skill.name, item.action]),
+    [
+      ["old-only", "remove"],
+      ["shared", "keep"],
+      ["cross-profile", "keep"],
+      ["local-old", "skip"],
+    ],
+  );
+});
+
+test("cleanup targets only the requested agent and activated exclusive groups", () => {
+  const catalog = validateCatalog({
+    ...catalogWithProfiles({
+      coding1: { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+      coding2: { exclusiveGroup: "coding" },
+      docs: {},
+    }),
+    skills: [
+      { package: "owner/old", names: ["old-only"], profiles: ["coding1"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+    ],
+  });
+
+  assert.deepEqual(buildCleanupPlan(catalog, ["coding2"], [
+    { name: "old-only", scope: "global", agents: ["Claude Code"] },
+  ], ["codex"]), []);
+  assert.deepEqual(buildCleanupPlan(catalog, ["docs"], [
+    { name: "old-only", scope: "global", agents: ["Codex"] },
+  ], ["codex"]), []);
+});
+
+test("cleanup handles multiple groups and every displaced member in a larger group", () => {
+  const catalog = validateCatalog({
+    ...catalogWithProfiles({
+      coding1: { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+      coding2: { exclusiveGroup: "coding" },
+      coding3: { exclusiveGroup: "coding" },
+      docs1: { exclusiveGroup: "docs", defaultInExclusiveGroup: true },
+      docs2: { exclusiveGroup: "docs" },
+    }),
+    skills: [
+      { package: "owner/one", names: ["one"], profiles: ["coding1"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/three", names: ["three"], profiles: ["coding3"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/docs", names: ["old-docs"], profiles: ["docs1"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+    ],
+  });
+  const installed = ["one", "three", "old-docs"].map((name) => ({ name, scope: "global", agents: ["Codex"] }));
+
+  assert.deepEqual(
+    buildCleanupPlan(catalog, ["coding2", "docs2"], installed, ["codex"])
+      .filter((item) => item.action === "remove")
+      .map((item) => item.skill.name),
+    ["one", "three", "old-docs"],
+  );
+});
+
+test("groups removals by scope and builds agent-scoped CLI arguments", () => {
+  const removals = [
+    { action: "remove", skill: { name: "global-a", scope: "global" } },
+    { action: "remove", skill: { name: "global-b", scope: "global" } },
+    { action: "remove", skill: { name: "project-a", scope: "project" } },
+  ];
+  const batches = buildRemovalBatches(removals, ["codex"]);
+
+  assert.deepEqual(batches, [
+    { names: ["global-a", "global-b"], scope: "global", agents: ["codex"] },
+    { names: ["project-a"], scope: "project", agents: ["codex"] },
+  ]);
+  assert.deepEqual(removeArgs(batches[0]), [
+    "remove", "global-a", "global-b", "--agent", "codex", "--yes", "--global",
+  ]);
+  assert.deepEqual(removeArgs(batches[1]), [
+    "remove", "project-a", "--agent", "codex", "--yes",
+  ]);
+});
+
+test("skips cleanup when an optional installation fails", async () => {
+  const calls = [];
+  const result = await applySyncPlan({
+    profiles: ["coding2"],
+    plan: [action("new-skill")],
+    cleanupPlan: [{ action: "remove", skill: { name: "old-skill", scope: "global" } }],
+    detectedAgents: ["codex"],
+    cleanupAgents: ["codex"],
+  }, { yes: true }, {
+    runSkills(args) {
+      calls.push(args);
+      return { status: 1, stdout: "", stderr: "" };
+    },
+    listInstalled() {
+      throw new Error("cleanup verification must not run");
+    },
+  });
+
+  assert.equal(result.failed, true);
+  assert.deepEqual(calls.map((args) => args[0]), ["add"]);
+});
+
+test("aborts cleanup when a required installation fails", async () => {
+  const calls = [];
+  await assert.rejects(() => applySyncPlan({
+    profiles: ["coding2"],
+    plan: [action("required-new", { required: true })],
+    cleanupPlan: [{ action: "remove", skill: { name: "old-skill", scope: "global" } }],
+    detectedAgents: ["codex"],
+    cleanupAgents: ["codex"],
+  }, { yes: true }, {
+    runSkills(args) {
+      calls.push(args);
+      return { status: 1, stdout: "", stderr: "" };
+    },
+  }), /Required skills failed/);
+
+  assert.deepEqual(calls.map((args) => args[0]), ["add"]);
+});
+
+test("fails sync when cleanup verification finds a residual agent link", async () => {
+  const calls = [];
+  const result = await applySyncPlan({
+    profiles: ["coding2"],
+    plan: [],
+    cleanupPlan: [{ action: "remove", skill: { name: "old-skill", scope: "global" } }],
+    detectedAgents: ["codex"],
+    cleanupAgents: ["codex"],
+  }, { yes: false }, {
+    runSkills(args) {
+      calls.push(args);
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    listInstalled() {
+      return [{ name: "old-skill", scope: "global", agents: ["Codex"] }];
+    },
+  });
+
+  assert.equal(result.failed, true);
+  assert.equal(result.residual.length, 1);
+  assert.deepEqual(calls.map((args) => args[0]), ["remove"]);
+});
+
+test("completes cleanup when post-removal verification is clear", async () => {
+  const result = await applySyncPlan({
+    profiles: ["coding2"],
+    plan: [],
+    cleanupPlan: [{ action: "remove", skill: { name: "old-skill", scope: "global" } }],
+    detectedAgents: ["codex"],
+    cleanupAgents: ["codex"],
+  }, { yes: false }, {
+    runSkills() {
+      return { status: 0, stdout: "", stderr: "" };
+    },
+    listInstalled() {
+      return [];
+    },
+  });
+
+  assert.equal(result.failed, false);
+  assert.deepEqual(result.residual, []);
+});
+
+test("profile audit distinguishes missing, conflicting, managed, and unmanaged skills", () => {
+  const catalog = validateCatalog({
+    ...catalogWithProfiles({
+      core: {},
+      coding1: { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+      coding2: { exclusiveGroup: "coding" },
+    }),
+    skills: [
+      { package: "owner/core", names: ["core-skill"], profiles: ["core"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/old", names: ["old-skill"], profiles: ["coding1"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+      { package: "owner/new", names: ["new-skill"], profiles: ["coding2"], scope: "global", agents: ["detected"], required: false, reviewed: true },
+    ],
+  });
+  const { drift } = buildAuditFindings(catalog, ["coding2"], [
+    { name: "core-skill", scope: "global", agents: ["Codex"] },
+    { name: "old-skill", scope: "global", agents: ["Codex"] },
+    { name: "outside", scope: "global", agents: ["Codex"] },
+  ], ["codex"], { profileAudit: true });
+
+  assert.equal(drift.some((line) => line.includes("[MISSING] global:new-skill")), true);
+  assert.equal(drift.some((line) => line.includes("[CONFLICT] global:old-skill")), true);
+  assert.equal(drift.some((line) => line.includes("[UNMANAGED] global:outside")), true);
+  assert.equal(drift.some((line) => line.includes("core-skill")), false);
+});
+
+test("init is no longer an executable command", () => {
+  const result = spawnSync(process.execPath, [join(import.meta.dirname, "manage-skills.mjs"), "init"], {
+    cwd: join(import.meta.dirname, ".."),
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Unknown command: init/);
+});
+
+test("skill metadata and README prompts route environment changes through sync", async () => {
+  const repositoryRoot = join(import.meta.dirname, "..");
+  const [readme, skill, operations, metadata] = await Promise.all([
+    readFile(join(repositoryRoot, "README.md"), "utf8"),
+    readFile(join(repositoryRoot, "SKILL.md"), "utf8"),
+    readFile(join(repositoryRoot, "references", "operations.md"), "utf8"),
+    readFile(join(repositoryRoot, "agents", "openai.yaml"), "utf8"),
+  ]);
+
+  assert.doesNotMatch(`${readme}\n${skill}\n${operations}`, /manage-skills\.mjs init/);
+  assert.match(readme, /使用 \$my-skills-skill 初始化我的 Skill。/);
+  assert.match(readme, /使用 \$my-skills-skill 同步我的 Skill。/);
+  assert.match(readme, /“更新”只升级已安装受管 Skill 的版本，不执行 Profile 同步/);
+  assert.match(skill, /initialize my skills.*sync my skills.*environment sync/);
+  assert.match(skill, /update my skills.*version updates only/);
+  assert.match(metadata, /default_prompt: .*sync my environment to the default profiles/);
+});
+
+test("validates exclusive groups and their single defaults", () => {
+  const catalog = catalogWithProfiles({
+    core: {},
+    "coding-a": { exclusiveGroup: " coding ", defaultInExclusiveGroup: true },
+    "coding-b": { exclusiveGroup: "coding" },
+  });
+
+  assert.equal(validateCatalog(catalog), catalog);
+  assert.equal(catalog.profiles["coding-a"].exclusiveGroup, "coding");
+
+  assert.throws(
+    () => validateCatalog(catalogWithProfiles({ only: { exclusiveGroup: "coding", defaultInExclusiveGroup: true } })),
+    /at least two profiles/,
+  );
+  assert.throws(
+    () => validateCatalog(catalogWithProfiles({
+      a: { exclusiveGroup: "coding" },
+      b: { exclusiveGroup: "coding" },
+    })),
+    /exactly one/,
+  );
+  assert.throws(
+    () => validateCatalog(catalogWithProfiles({
+      a: { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+      b: { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+    })),
+    /exactly one/,
+  );
+  assert.throws(
+    () => validateCatalog(catalogWithProfiles({ a: { defaultInExclusiveGroup: true } })),
+    /requires exclusiveGroup/,
+  );
+  assert.throws(
+    () => validateCatalog(catalogWithProfiles({ a: { defaultInExclusiveGroup: false } })),
+    /requires exclusiveGroup/,
+  );
+});
+
+test("rejects conflicting default profiles", () => {
+  const catalog = catalogWithProfiles({
+    "coding-a": { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+    "coding-b": { exclusiveGroup: "coding" },
+  }, ["coding-a", "coding-b"]);
+
+  assert.throws(() => validateCatalog(catalog), /defaultProfiles conflict.*coding: coding-a, coding-b/);
+});
+
+test("allows defaultProfiles to choose a non-default exclusive variant", () => {
+  const catalog = validateCatalog(catalogWithProfiles({
+    "coding-a": { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+    "coding-b": { exclusiveGroup: "coding" },
+  }, ["coding-b"]));
+
+  assert.deepEqual(selectProfiles(catalog), ["coding-b"]);
+});
+
+test("uses exclusive-group defaults for plan and sync selections", () => {
+  const catalog = validateCatalog(catalogWithProfiles({
+    core: {},
+    "coding-a": { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+    "coding-b": { exclusiveGroup: "coding" },
+    docs: {},
+  }));
+
+  assert.deepEqual(selectProfiles(catalog, null, true), ["core", "coding-a", "docs"]);
+  assert.deepEqual(selectProfiles(catalog, ["coding-b", "coding-b"]), ["coding-b"]);
+  assert.throws(
+    () => selectProfiles(catalog, ["coding-a", "coding-b"]),
+    /exclusive groups.*coding: coding-a, coding-b/,
+  );
+});
+
+test("reports every conflicting exclusive group", () => {
+  const catalog = validateCatalog(catalogWithProfiles({
+    "coding-a": { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+    "coding-b": { exclusiveGroup: "coding" },
+    "docs-a": { exclusiveGroup: "docs", defaultInExclusiveGroup: true },
+    "docs-b": { exclusiveGroup: "docs" },
+  }));
+
+  assert.throws(
+    () => selectProfiles(catalog, ["coding-a", "coding-b", "docs-a", "docs-b"]),
+    /coding: coding-a, coding-b; docs: docs-a, docs-b/,
+  );
+});
+
+test("allows audit selections to include every exclusive profile", () => {
+  const catalog = validateCatalog(catalogWithProfiles({
+    core: {},
+    "coding-a": { exclusiveGroup: "coding", defaultInExclusiveGroup: true },
+    "coding-b": { exclusiveGroup: "coding" },
+  }));
+
+  assert.deepEqual(
+    selectProfiles(catalog, null, true, { allowConflicts: true }),
+    ["core", "coding-a", "coding-b"],
+  );
+  assert.deepEqual(
+    selectProfiles(catalog, ["coding-a", "coding-b"], false, { allowConflicts: true }),
+    ["coding-a", "coding-b"],
   );
 });
 

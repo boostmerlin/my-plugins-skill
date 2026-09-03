@@ -6,7 +6,18 @@
 {
   "schemaVersion": 1,
   "defaultProfiles": ["core"],
-  "profiles": { "core": { "description": "Skills installed everywhere" } },
+  "profiles": {
+    "core": { "description": "Skills installed everywhere" },
+    "coding-a": {
+      "description": "Coding toolset A",
+      "exclusiveGroup": "coding",
+      "defaultInExclusiveGroup": true
+    },
+    "coding-b": {
+      "description": "Coding toolset B",
+      "exclusiveGroup": "coding"
+    }
+  },
   "skills": [{
     "package": "owner/repository",
     "names": ["example-skill-1", "example-skill-2"],
@@ -22,12 +33,27 @@
 ## Rules
 
 - `schemaVersion` is `1`; every default/referenced profile must exist.
+- Profiles with the same non-empty, case-sensitive `exclusiveGroup` are mutually exclusive for `plan`, `sync`, and explicit-profile audit; surrounding whitespace is ignored. A group must contain at least two profiles and exactly one must set `defaultInExclusiveGroup: true`.
+- `defaultInExclusiveGroup` requires `exclusiveGroup`. It is used by `plan --all` and `sync --all`; it does not implicitly add a profile to ordinary selections or to `defaultProfiles`.
+- `defaultProfiles` may name a non-default member of an exclusive group, but it must not contain more than one member of the same group.
 - `package` is a Skills CLI source: preferably `owner/repository`/trusted Git URL, or an explicitly path-shaped local source.
 - `names`, `profiles`, and `agents` are non-empty arrays. A name is unique per scope; combine profiles instead of duplicating it.
 - `scope` is `global` or `project`.
 - `agents: ["detected"]` must stand alone. It targets the active runtime, not `*`, and does not guarantee exclusive visibility when CLI storage is shared.
-- `required: true` stops initialization when its installation batch fails; optional failures are summarized.
+- `required: true` stops sync when its installation batch fails; optional failures are summarized and also prevent cleanup.
 - `reviewed: true` is required for installation. Provenance confidence and content review are separate decisions.
+
+## Exclusive profiles
+
+Explicitly selecting two members of one group is rejected before runtime detection or installation inspection:
+
+```shell
+node scripts/manage-skills.mjs plan --profile coding-a,coding-b
+```
+
+Shared Skills belong to both profiles in one catalog entry, for example `"profiles": ["coding-a", "coding-b"]`. Do not duplicate a Skill entry: names remain unique per scope.
+
+For `plan` and `sync`, `--all` selects every profile outside an exclusive group plus the default member of each group. Sync removes installed remote Skills that are managed exclusively by displaced members, while preserving shared, non-conflicting, unmanaged, and local-source Skills. `audit --all` remains a full-catalog audit and includes every member because it never changes anything.
 
 ## Local sources
 

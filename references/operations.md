@@ -16,21 +16,24 @@ node scripts/manage-skills.mjs sources [skill ...] [--json] [--verify-remote]
 - `audit`: full catalog drift, including missing and unmanaged installs.
 - `sources`: provenance for installed non-system Skills; see [provenance.md](provenance.md).
 
-`--profile` accepts comma-separated profiles. `--all` selects every profile currently declared in `skillset.json`, so callers do not need to enumerate names; it cannot be combined with `--profile`. `detected` resolves to the active runtime; outside a recognized session, pass `--agent` or set `MY_SKILLS_AGENT`. It never resolves to `*`, though shared CLI storage may expose a Skill to compatible agents.
+`--profile` accepts comma-separated profiles. Repeated values and repeated `--profile` options are merged with first-seen order preserved. `--all` cannot be combined with `--profile`. For `plan` and `sync`, it selects every ordinary profile plus the configured default from each exclusive group. For full-catalog `audit`, it selects every configured profile, including all mutually exclusive variants. `detected` resolves to the active runtime; outside a recognized session, pass `--agent` or set `MY_SKILLS_AGENT`. It never resolves to `*`, though shared CLI storage may expose a Skill to compatible agents.
 
-Local catalog sources are inventory-only: `plan`/`init` report `SKIP`, `audit` reports `LOCAL`, and restoration does not install them. `audit` exits `1` on drift; `sources` exits `1` on unresolved provenance or operational errors. Both only report.
+Local catalog sources are inventory-only: `plan`/`sync` report `SKIP`, `audit` reports `LOCAL`, and sync neither installs nor removes them. `audit` exits `1` on drift; `sources` exits `1` on unresolved provenance or operational errors. Both only report.
 
-## Initialization
+## Environment sync
 
 ```shell
-node scripts/manage-skills.mjs init --profile core,coding
-node scripts/manage-skills.mjs init --profile core,coding --agent codex --yes
-node scripts/manage-skills.mjs init --all --agent codex --yes
+node scripts/manage-skills.mjs sync
+node scripts/manage-skills.mjs sync --profile core,coding2
+node scripts/manage-skills.mjs sync --profile core,coding2 --agent codex --yes
+node scripts/manage-skills.mjs sync --all --agent codex --yes
 ```
 
-When the user asks to initialize all/every profile, use `--all` instead of listing profile names. Omitting both selectors still uses `defaultProfiles`.
+Natural-language requests to initialize or sync Skills route here. Omitting both selectors uses `defaultProfiles`; named profiles use `--profile`; all compatible profiles use `--all`, which selects each exclusive group's default. Explicitly selecting more than one member of a group fails before any installation checks.
 
-First show the plan and obtain confirmation. Interactive runs prompt; non-interactive runs use `--yes` only after confirmation. Missing remote Skills sharing source, scope, resolved agents, and `required` policy are installed as one batch. Required-batch failure stops; optional failures are collected while other batches continue. A retry skips completed installs.
+`plan` and the beginning of `sync` show both installs and removals. Interactive sync prompts only when installation is needed; non-interactive installation uses `--yes` only after plan confirmation. Cleanup-only sync executes without a second prompt. Missing remote Skills sharing source, scope, resolved agents, and `required` policy are installed as one batch. Any required or optional installation failure skips all cleanup. After successful installation, cleanup removes only installed remote catalog Skills managed exclusively by displaced profiles, scoped to the current target agent. Removal is verified by listing installed Skills again; command failures or residual links make sync exit `1`.
+
+Explicit `audit --profile <...>` checks a realizable environment: selected Skills must exist, displaced exclusive Skills are `CONFLICT`, other catalog-managed Skills are ignored, and only identities outside the full catalog are unmanaged. It rejects mutually exclusive selections. Audit without a selector and `audit --all` remain full-catalog checks.
 
 ## Discovery and updates
 
@@ -41,4 +44,4 @@ npx skills update --global
 npx skills update --project
 ```
 
-Before `add` or `update`, show source, names, scope, and agents and obtain confirmation. Audit afterward. Initialization and audit never call `remove`.
+Before `add` or a version update, show source, names, scope, and agents and obtain confirmation. A request to "update my skills" means this version-update workflow only and does not run environment sync. Audit afterward. Audit never calls `remove`.

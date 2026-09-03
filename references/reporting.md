@@ -4,7 +4,7 @@ Turn raw command output into a compact Markdown report in the user's language. P
 
 ## Visual hierarchy
 
-- Lead with a short outcome heading: `## 初始化计划`, `## 初始化完成`, `## 审计发现漂移`, or the equivalent in the user's language.
+- Lead with a short outcome heading: `## 同步计划`, `## 同步完成`, `## 审计发现漂移`, or the equivalent in the user's language.
 - Put the key counts immediately below the heading in one bold summary line. Use `·` between metrics instead of a long sentence.
 - Use a table when comparing three or more sources, profiles, or statuses. Do not repeat the same label in a long bullet list.
 - Use status symbols consistently: `✓` success, `!` warning or drift, `×` failure. Do not decorate every line with emoji.
@@ -18,42 +18,42 @@ Turn raw command output into a compact Markdown report in the user's language. P
 Show the selected profiles, target agent, scope, total skills, and batch count before the exact source plan. Group skills by install batch and preserve whether each batch is required or optional.
 
 ```markdown
-## 初始化计划
+## 同步计划
 
-**23 个 Skill · 9 个批次 · 4 个 Profile · 全局安装至 `codex`**
+**23 个 Skill · 9 个安装批次 · 3 个待清理 · 全局同步至 `codex`**
 
-Profile：`core` · `coding` · `docs` · `work-wecom`
+Profile：`core` · `coding2`
 
-| 策略 | 来源 | Skill |
+| 动作 | 来源 | Skill |
 |---|---|---|
-| 必需 | `owner/repository` | `skill-a`、`skill-b` |
-| 可选 | `owner/another` | `skill-c` |
+| 安装（必需） | `owner/repository` | `skill-a`、`skill-b` |
+| 删除（互斥） | `owner/another` | `skill-c` |
 
 ### 安全边界
 
 - ✓ 所有计划来源均已审核
-- ✓ 未纳管 Skill 不会被删除、纳管或覆盖
+- ✓ 未纳管、共享、非冲突和本地 Skill 不会被删除
 
 ### 下一步
 
-确认后开始安装，并在完成后自动审计。**是否执行？**
+确认后开始安装；安装全部成功后自动清理互斥 Skill。**是否执行？**
 ```
 
 For a large batch, show its count and all exact names. Wrap naturally inside the table cell; do not replace the names with a wildcard if doing so would make the approval plan ambiguous.
 
-## Initialization result
+## Sync result
 
 Lead with installed versus planned counts. Summarize profile results in a table when useful, then separate audit drift and security scanner findings.
 
 ```markdown
-## 初始化完成
+## 同步完成
 
-**✓ 23/23 个 Skill 已安装 · 9/9 个批次成功**
+**✓ 23/23 个 Skill 已安装 · 3/3 个互斥 Skill 已清理**
 
 | Profile | 结果 |
 |---|---:|
 | `core` | ✓ 完成 |
-| `coding` | ✓ 完成 |
+| `coding2` | ✓ 完成 |
 
 ### 审计
 
