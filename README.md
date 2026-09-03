@@ -1,0 +1,207 @@
+# my-skills-skill
+
+一个交给 Agent 执行的个人 Skill 管理器。它使用 `skillset.json` 保存经过审核的常用 Skill，让你在新环境中通过自然语言完成检查、规划、初始化和审计。
+
+## 安装
+
+```bash
+npx skills add boostmerlin/my-skills-skill --skill my-skills-skill --global
+```
+
+推荐先将本仓库 Fork 到自己的 GitHub 账号，再从个人 Fork 安装。这样 `skillset.json` 会成为你自己的、可版本控制的 Skill 清单。
+
+配置字段和规则详见 [`references/configuration.md`](./references/configuration.md)。请保留 `schemaVersion: 1`；通常建议保留 `agents: ["detected"]`，让管理器以当前 Agent 为安装目标。
+
+### 2. 从个人 Fork 安装
+
+将下面的 `<your-github-user>` 替换为你的 GitHub 用户名：
+
+```bash
+npx skills add <your-github-user>/my-skills-skill --skill my-skills-skill --global
+```
+
+也可以把个人 Fork 或其本地克隆交给 Agent，然后使用：
+
+```text
+从 <your-github-user>/my-skills-skill 安装 my-skills-skill 为全局 Skill。
+```
+一般会使用Agent自带的skill installer 安装本skill。
+安装完成后开启新会话，再使用下方 Prompt 初始化或审计环境。
+
+## 推荐 Prompt
+
+### 初始化全新环境
+
+```text
+使用 $my-skills-skill 初始化这个全新环境。
+```
+
+当前默认 Profile 是 `core`。
+
+### 初始化全部 Profile
+
+```text
+使用 $my-skills-skill 初始化全部的 Profile。
+```
+
+Agent 会自动选择 `skillset.json` 中当前声明的所有 Profile，无需在 Prompt 中逐一列出。
+
+### 选择部分 Profile
+
+```text
+使用 $my-skills-skill 初始化 core 和 coding Profile。
+```
+
+### 只查看计划
+
+```text
+使用 $my-skills-skill 查看全部 Profile 的初始化计划。
+```
+
+### 审计当前环境
+
+```text
+使用 $my-skills-skill 审计当前环境。
+```
+
+### 查找新的 Skill
+
+```text
+使用 $my-skills-skill 查找适合「<你的需求>」的 Skill。
+```
+
+限定 GitHub 作者：
+
+```text
+使用 $my-skills-skill 在 <owner> 的仓库中查找适合「<你的需求>」的 Skill。
+```
+
+### 将 Skill 加入配置
+
+```text
+使用 $my-skills-skill 审核并将 <owner/repository> 的 <skill-name> 加入 <profile>：
+scope=<global|project>，agents=detected，required=<true|false>。
+```
+
+### 导出当前 Skill
+
+```text
+使用 $my-skills-skill 给出当前非系统 Skill 的 skillset.json 导出方案。
+```
+
+### 确认单个 Skill 的来源
+
+```text
+使用 $my-skills-skill 确认 grill-me 的来源并显示证据。
+```
+
+允许联网补充验证：
+
+```text
+使用 $my-skills-skill 联网确认 <skill-name> 的来源。
+```
+
+### 记录本机 Skill
+
+```text
+使用 $my-skills-skill 将 ./path/to/local-skill 的 <skill-name> 记录为本地来源。
+```
+
+### 更新已安装 Skill
+
+```text
+使用 $my-skills-skill 更新受管 Skill。
+```
+
+### 从配置移除但保留本机安装
+
+```text
+使用 $my-skills-skill 从配置移除 <skill-name>，保留本机安装。
+```
+
+## 当前配置
+
+见 [skillset](./skillset.json)
+
+## Agent 会做什么
+
+收到 Prompt 后，Agent 会根据请求选择以下操作：
+
+1. 检查 Node.js、Git、Skills CLI、配置和当前 Agent。
+2. 将 `skillset.json` 与当前安装状态对比。
+3. 在任何安装或更新前展示计划并等待确认。
+4. 将同来源、同 scope、同目标 Agent、同失败策略的缺失项合并安装。
+5. 安装后审计缺失项、链接问题和未纳管项。
+6. 导出前交叉检查 CLI 元数据、lock 记录和本地 Git 证据，并展示可信等级。
+
+只读操作不会改变安装状态。初始化和更新属于修改操作，Agent 必须先获得确认。
+
+## 关键行为
+
+### `skillset.json` 是配置源
+
+应由人审核并纳入版本控制的是 `skillset.json`。它记录：
+
+- 来源（远程仓库或本机路径）和准确 Skill 名称
+- 所属 Profile
+- `global` 或 `project` scope
+- 目标 Agent
+- 是否为必需项
+- 来源是否已审核
+
+`skills-lock.json` 不是本项目的人工配置源；它只是 Skills CLI 可能使用的项目级状态。
+
+配置格式详见 [references/configuration.md](references/configuration.md)。
+
+### 来源确认与导出门槛
+
+来源确认默认完全离线。Agent 会交叉检查 Skills CLI 的 JSON 元数据、对应 scope 的 lock 记录，以及安装路径解析后的 Git remote。只有明确允许时，才会联网查询候选仓库公开的 Skill 列表。
+
+- `CONFIRMED`：CLI 与 lock 指向同一来源。
+- `VERIFIED`：本地 Git origin 或显式远程查询提供了独立验证。
+- `CANDIDATE`：证据单一或互相冲突，需要人工确认。
+- `UNKNOWN`：没有可信来源线索。
+- `LOCAL`：机器本地路径，不适合跨环境恢复。
+
+只有 `CONFIRMED` 和 `VERIFIED` 可以进入远程导出方案。确认的是安装来源，不代表本地文件内容从未被修改。详细规则见 [references/provenance.md](references/provenance.md)。
+
+本机路径也可以直接写入 `package`，无需增加 `sourceType`。与 Skills CLI 相同，绝对路径、`./`、`../`、`.`、`..` 和 Windows 盘符路径会被识别为本地来源。它们只作为本机清单保留：恢复时由 Agent 跳过并报告，不会在其他环境尝试安装。
+
+### 自动识别当前 Agent
+
+配置中的 `agents: ["detected"]` 表示让管理器把当前运行 Agent 传给 Skills CLI，而不是使用 `--agent '*'`。目前能够从运行时标记自动识别 Codex 和 Claude Code；无法识别或检测结果冲突时，Agent 会要求你明确目标。
+
+指定 Codex 不代表其他 Agent 一定看不到该 Skill。Skills CLI 可能把内容存入共享的 `~/.agents/skills/`，使 Cursor、GitHub Copilot 等兼容 Agent 同样可见。`detected` 保证的是请求的安装目标，不保证目录隔离。
+
+## 安全边界
+
+- 未经审核的条目不会安装。
+- 未经确认不会开始安装或更新。
+- 未纳管 Skill 只报告，不自动删除或加入配置。
+- 不管理系统内置 Skill、插件缓存、凭据或系统依赖。
+- 不因初始化而自动卸载任何 Skill。
+- 本地修改可能被覆盖时，Agent 应停止并报告冲突。
+
+完整操作规则见 [references/operations.md](references/operations.md)。
+
+## 项目结构
+
+```text
+my-skills-skill/
+├── README.md                        用户 Prompt 与使用说明
+├── SKILL.md                         Agent 执行入口
+├── skillset.json                    受管 Skill 配置源
+├── agents/openai.yaml               Codex UI 元数据
+├── scripts/manage-skills.mjs        确定性管理脚本
+├── scripts/manage-skills.test.mjs   批处理逻辑测试
+└── references/
+    ├── configuration.md             配置和 Agent 目录规则
+    ├── operations.md                操作流程与安全约束
+    └── provenance.md                来源证据、状态与导出规则
+```
+
+维护者修改配置或脚本后，可以直接要求 Agent：
+
+```text
+验证 my-skills-skill。
+```

@@ -1,0 +1,7 @@
+interface:
+  display_name: "My Skills"
+  short_description: "Initialize and audit your trusted skill catalog"
+  default_prompt: "Use $my-skills-skill to plan initialization of my core skills."
+
+policy:
+  allow_implicit_invocation: true

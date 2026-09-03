@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "defaultProfiles": ["core"],
+  "profiles": {
+    "core": {
+      "description": "Skills installed in every environment"
+    },
+    "coding": {
+      "description": "Software development skills"
+    },
+    "docs": {
+      "description": "Document, spreadsheet, and presentation skills"
+    },
+    "work-wecom": {
+      "description": "WeCom workplace skills"
+    }
+  },
+  "skills": [
+    {
+      "package": "vercel-labs/skills",
+      "names": ["find-skills"],
+      "profiles": ["core"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": true,
+      "reviewed": true
+    },
+    {
+      "package": "https://github.com/anthropics/claude-plugins-community/tree/main/eli5",
+      "names": ["eli5"],
+      "profiles": ["docs"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "mattpocock/skills",
+      "names": ["grill-me", "grilling"],
+      "profiles": ["coding"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "forrestchang/andrej-karpathy-skills",
+      "names": ["karpathy-guidelines"],
+      "profiles": ["coding"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "yizhiyanhua-ai/fireworks-tech-graph",
+      "names": ["fireworks-tech-graph"],
+      "profiles": ["coding"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "anthropics/skills",
+      "names": ["frontend-design"],
+      "profiles": ["coding"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "openai/skills",
+      "names": ["playwright"],
+      "profiles": ["coding"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "WecomTeam/wecom-unified",
+      "names": ["wecom-unified"],
+      "profiles": ["work-wecom"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    }
+  ]
+}
