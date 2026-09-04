@@ -130,8 +130,9 @@ test("current catalog groups each multi-skill source into one installation batch
   const batches = buildInstallBatches(actions, ["codex"]);
 
   assert.ok(batches.length < actions.length);
-  assert.equal(batches.find((batch) => batch.package === "mattpocock/skills").names.length, 2);
+  assert.equal(batches.find((batch) => batch.package === "mattpocock/skills").names.length, 5);
   assert.equal(batches.find((batch) => batch.package === "obra/superpowers").names.length, 14);
+  assert.equal(batches.find((batch) => batch.package === "coreyhaines31/marketingskills").names.length, 50);
 });
 
 test("normalizes common GitHub source forms to one identity", () => {
