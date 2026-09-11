@@ -1,7 +1,7 @@
 interface:
-  display_name: "My Skills"
-  short_description: "Sync, update, and audit your trusted skill catalog"
-  default_prompt: "Use $my-skills-skill to sync my environment to the default profiles."
+  display_name: "My Plugins"
+  short_description: "Manage trusted skills and external plugins"
+  default_prompt: "Use $my-plugins-skill to sync my environment to the default profiles."
 
 policy:
   allow_implicit_invocation: true

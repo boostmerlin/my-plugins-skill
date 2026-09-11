@@ -539,8 +539,8 @@ test("skill metadata and README prompts route environment changes through sync",
   ]);
 
   assert.doesNotMatch(`${readme}\n${skill}\n${operations}`, /manage-skills\.mjs init/);
-  assert.match(readme, /使用 \$my-skills-skill 初始化我的 Skill。/);
-  assert.match(readme, /使用 \$my-skills-skill 同步我的 Skill。/);
+  assert.match(readme, /使用 \$my-plugins-skill 初始化我的 Skill。/);
+  assert.match(readme, /使用 \$my-plugins-skill 同步我的 Skill。/);
   assert.match(readme, /“更新”只升级已安装受管 Skill 的版本，不执行 Profile 同步/);
   assert.match(skill, /initialize my skills.*sync my skills.*environment sync/);
   assert.match(skill, /update my skills.*version updates only/);

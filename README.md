@@ -1,11 +1,11 @@
-# my-skills-skill
+# my-plugins-skill
 
-一个交给 Agent 执行的个人 Skill 管理器。它使用 `pluginset.json` 保存经过审核的常用 Skill，让你通过自然语言完成检查、规划、环境同步、版本更新和审计。
+一个交给 Agent 执行的个人 Skill 与外部插件管理器。它使用 `pluginset.json` 保存经过审核的常用 Skill 和插件，让你通过自然语言完成检查、规划、环境同步、安装、更新、卸载和审计。
 
 ## 安装
 
 ```bash
-npx skills add boostmerlin/my-skills-skill --skill my-skills-skill --global
+npx skills add boostmerlin/my-plugins-skill --skill my-plugins-skill --global
 ```
 
 推荐先将本仓库 Fork 到自己的 GitHub 账号，再从个人 Fork 安装。这样 `pluginset.json` 会成为你自己的、可版本控制的 Skill 清单。
@@ -17,13 +17,13 @@ npx skills add boostmerlin/my-skills-skill --skill my-skills-skill --global
 将下面的 `<your-github-user>` 替换为你的 GitHub 用户名：
 
 ```bash
-npx skills add <your-github-user>/my-skills-skill --skill my-skills-skill --global
+npx skills add <your-github-user>/my-plugins-skill --skill my-plugins-skill --global
 ```
 
 也可以把个人 Fork 或其本地克隆交给 Agent，然后使用：
 
 ```text
-从 <your-github-user>/my-skills-skill 安装 my-skills-skill 为全局 Skill。
+从 <your-github-user>/my-plugins-skill 安装 my-plugins-skill 为全局 Skill。
 ```
 一般会使用Agent自带的skill installer 安装本skill。
 安装完成后开启新会话，再使用下方 Prompt 同步或审计环境。
@@ -33,11 +33,11 @@ npx skills add <your-github-user>/my-skills-skill --skill my-skills-skill --glob
 ### 初始化我的 Skill（默认 Profile）
 
 ```text
-使用 $my-skills-skill 初始化我的 Skill。
+使用 $my-plugins-skill 初始化我的 Skill。
 ```
 
 ```text
-使用 $my-skills-skill 同步我的 Skill。
+使用 $my-plugins-skill 同步我的 Skill。
 ```
 
 “初始化”是自然语言别名，Agent 实际执行无选择器的 `sync`，严格使用 `defaultProfiles`。当前默认 Profile 是 `core`。
@@ -45,7 +45,7 @@ npx skills add <your-github-user>/my-skills-skill --skill my-skills-skill --glob
 ### 同步全部兼容 Profile
 
 ```text
-使用 $my-skills-skill 同步全部 Profile。
+使用 $my-plugins-skill 同步全部 Profile。
 ```
 
 Agent 会选择所有普通 Profile，以及每个互斥组中配置的默认 Profile，无需逐一列出。
@@ -53,68 +53,68 @@ Agent 会选择所有普通 Profile，以及每个互斥组中配置的默认 Pr
 ### 同步到指定 Profile
 
 ```text
-使用 $my-skills-skill 将当前环境同步到 core 和 coding2 Profile。
+使用 $my-plugins-skill 将当前环境同步到 core 和 coding2 Profile。
 ```
 
 ### 只查看计划
 
 ```text
-使用 $my-skills-skill 查看同步到 core 和 coding2 Profile 的计划，不执行修改。
+使用 $my-plugins-skill 查看同步到 core 和 coding2 Profile 的计划，不执行修改。
 ```
 
 ### 审计指定 Profile 环境
 
 ```text
-使用 $my-skills-skill 审计当前 coding2 Profile 环境。
+使用 $my-plugins-skill 审计当前 coding2 Profile 环境。
 ```
 
 ### 查找新的 Skill
 
 ```text
-使用 $my-skills-skill 查找适合「<你的需求>」的 Skill。
+使用 $my-plugins-skill 查找适合「<你的需求>」的 Skill。
 ```
 
 限定 GitHub 作者：
 
 ```text
-使用 $my-skills-skill 在 <owner> 的仓库中查找适合「<你的需求>」的 Skill。
+使用 $my-plugins-skill 在 <owner> 的仓库中查找适合「<你的需求>」的 Skill。
 ```
 
 ### 将 Skill 加入配置
 
 ```text
-使用 $my-skills-skill 审核并将 <owner/repository> 的 <skill-name> 加入 <profile>：
+使用 $my-plugins-skill 审核并将 <owner/repository> 的 <skill-name> 加入 <profile>：
 scope=<global|project>，agents=detected，required=<true|false>。
 ```
 
 ### 导出当前 Skill
 
 ```text
-使用 $my-skills-skill 给出当前非系统 Skill 的 pluginset.json 导出方案。
+使用 $my-plugins-skill 给出当前非系统 Skill 的 pluginset.json 导出方案。
 ```
 
 ### 确认单个 Skill 的来源
 
 ```text
-使用 $my-skills-skill 确认 grill-me 的来源并显示证据。
+使用 $my-plugins-skill 确认 grill-me 的来源并显示证据。
 ```
 
 允许联网补充验证：
 
 ```text
-使用 $my-skills-skill 联网确认 <skill-name> 的来源。
+使用 $my-plugins-skill 联网确认 <skill-name> 的来源。
 ```
 
 ### 记录本机 Skill
 
 ```text
-使用 $my-skills-skill 将 ./path/to/local-skill 的 <skill-name> 记录为本地来源。
+使用 $my-plugins-skill 将 ./path/to/local-skill 的 <skill-name> 记录为本地来源。
 ```
 
 ### 更新已安装 Skill 的版本
 
 ```text
-使用 $my-skills-skill 更新我的 Skill。
+使用 $my-plugins-skill 更新我的 Skill。
 ```
 
 “更新”只升级已安装受管 Skill 的版本，不执行 Profile 同步或互斥清理。
@@ -122,7 +122,7 @@ scope=<global|project>，agents=detected，required=<true|false>。
 ### 从配置移除但保留本机安装
 
 ```text
-使用 $my-skills-skill 从配置移除 <skill-name>，保留本机安装。
+使用 $my-plugins-skill 从配置移除 <skill-name>，保留本机安装。
 ```
 
 ## 外部插件管理
@@ -146,7 +146,7 @@ node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 
 ## 当前配置
 
-见 [skillset](./pluginset.json)
+见 [pluginset](./pluginset.json)
 
 ## Agent 会做什么
 
@@ -216,7 +216,7 @@ node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 ## 项目结构
 
 ```text
-my-skills-skill/
+my-plugins-skill/
 ├── README.md                        用户 Prompt 与使用说明
 ├── SKILL.md                         Agent 执行入口
 ├── pluginset.json                    受管 Skill 配置源
@@ -234,5 +234,5 @@ my-skills-skill/
 维护者修改配置或脚本后，可以直接要求 Agent：
 
 ```text
-验证 my-skills-skill。
+验证 my-plugins-skill。
 ```

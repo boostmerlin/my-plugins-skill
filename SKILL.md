@@ -1,11 +1,11 @@
 ---
-name: my-skills-skill
+name: my-plugins-skill
 description: Use when users request Skills CLI catalog initialization, sync, plan, audit, provenance, discovery, changes, or updates, or external command-managed plugin planning, installation, or removal.
 metadata:
-  short-description: Manage and restore trusted skills
+  short-description: Manage trusted skills and external plugins
 ---
 
-# My Skills
+# My Plugins
 
 Treat `pluginset.json` as the source of truth and `npx skills` as the installer. Lock files are optional CLI evidence, not managed configuration.
 
