@@ -11,6 +11,10 @@ Treat `pluginset.json` as the source of truth and `npx skills` as the installer.
 
 ## Route
 
+- Installed-agent discovery: only use plugin `--detect-installed` when targeting locally installed agents rather than the current session. Read [references/agent-detection.md](references/agent-detection.md). Configuration presence is not active-session evidence; never silently select installed candidates after runtime detection fails.
+
+- Plugin agent targets: resolve `agents: ["detected"]` using `--agent`, `MY_SKILLS_AGENT`, then active runtime; explicit lists remain authoritative. Require an `agentMap` entry for every target. Show expanded `{agent}` commands and targets; shared commands execute once. Missing/ambiguous targets fail before checks. Plugin removal remains full uninstall and may affect other agents through shared CLI removal; explain that scope before execution.
+
 - External plugin updates: use `scripts/manage_plugins.mjs update` with an explicit selector; preview without `--yes`, execute authorized updates with `--yes`. Require `updateCommand`, an available CLI, and `reviewed: true`; run setup after updating and stop on any failure. Skill version updates still use `npx skills update`.
 
 - Checks, plan, sync, audit, or version updates: read [references/operations.md](references/operations.md); use `scripts/manage-skills.mjs` where routed.

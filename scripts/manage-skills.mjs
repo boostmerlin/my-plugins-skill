@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
+import { detectActiveAgents } from "./agent-detection.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const catalogPath = join(root, "pluginset.json");
@@ -593,29 +594,6 @@ function assessProvenance(entry, lockEntry, gitEvidence = null, remoteEvidence =
   };
 }
 
-function detectActiveAgents(override) {
-  if (override) return override;
-
-  const configured = process.env.MY_SKILLS_AGENT?.split(",").map((item) => item.trim()).filter(Boolean);
-  if (configured?.length) return configured;
-
-  const detected = [];
-  if (
-    process.env.CODEX_SESSION_ID ||
-    process.env.CODEX_THREAD_ID ||
-    process.env.CODEX_CI ||
-    process.env.CODEX_INTERNAL_ORIGINATOR_OVERRIDE
-  ) {
-    detected.push("codex");
-  }
-  if (process.env.CLAUDECODE === "1") detected.push("claude-code");
-
-  if (detected.length === 1) return detected;
-  if (detected.length > 1) {
-    throw new Error(`Active agent is ambiguous (${detected.join(", ")}); pass --agent <id>`);
-  }
-  throw new Error("Could not detect the active agent; pass --agent <id> or set MY_SKILLS_AGENT");
-}
 
 function resolveAgents(skill, detectedAgents) {
   return skill.agents[0] === "detected" ? detectedAgents : skill.agents;

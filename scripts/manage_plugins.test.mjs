@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { detectActiveAgents, detectInstalledAgents } from "./agent-detection.mjs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -485,6 +487,150 @@ test("null required commands and null array elements remain invalid", () => {
   }
 });
 
+test("shared detector preserves override, environment and runtime precedence", () => {
+  assert.deepEqual(detectActiveAgents(["cursor"], { MY_SKILLS_AGENT: "codex" }), ["cursor"]);
+  assert.deepEqual(detectActiveAgents(undefined, { MY_SKILLS_AGENT: "codex, claude-code", CLAUDECODE: "1" }), ["codex", "claude-code"]);
+  for (const key of ["CODEX_SESSION_ID", "CODEX_THREAD_ID", "CODEX_CI", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE"]) {
+    assert.deepEqual(detectActiveAgents(undefined, { [key]: "1" }), ["codex"]);
+  }
+  assert.deepEqual(detectActiveAgents(undefined, { CLAUDECODE: "1" }), ["claude-code"]);
+  assert.throws(() => detectActiveAgents(undefined, {}), /Could not detect/);
+  assert.throws(() => detectActiveAgents(undefined, { CODEX_THREAD_ID: "1", CLAUDECODE: "1" }), /ambiguous/);
+});
+
+test("agent options merge and only resolve detected targets", async () => {
+  const args = parsePluginArgs(["plan", "--all", "--agent", "codex,claude-code", "--agent", "codex"]);
+  assert.deepEqual(args.agents, ["codex", "claude-code"]);
+  const input = catalog([plugin({ agents: ["cursor"], agentMap: { cursor: "cursor" }, setupCommand: "setup {agent}" })]);
+  const plan = await buildInstallPlan(input, args, { env: {}, runCheck: () => ({ status: 0 }) });
+  assert.deepEqual(plan[0].agents, ["cursor"]);
+  assert.deepEqual(plan[0].actions, [{ stage: "setup", command: "setup cursor", agent: "cursor" }]);
+  for (const value of ["detected", "codex;echo", "a b"]) assert.throws(() => parsePluginArgs(["plan", "--all", "--agent", value]));
+});
+
+test("multi-agent execution resolves platform first, preserves command order and deduplicates mapped targets", async () => {
+  for (const operation of ["install", "update", "remove"]) {
+    for (const yes of [false, true]) {
+      const calls = [], output = [];
+      const input = catalog([plugin({
+        agents: ["detected"], agentMap: { codex: "codex", "claude-code": "claude", alias: "codex" },
+        installCommand: "install-once", updateCommand: "update-once",
+        setupCommand: [{ default: "setup-posix {agent}", win32: "setup-win {agent}" }, "second {agent}", "shared-setup"],
+        uninstallCommands: ["remove {agent}", "remove-cli"],
+      })]);
+      const result = await main([operation, "--all", "--agent", "codex,claude-code,alias,codex", ...(yes ? ["--yes"] : [])], {
+        catalog: input, platform: "win32", env: {}, runCheck: () => ({ status: operation === "install" ? 1 : 0 }),
+        runMutation: async (command) => { calls.push(command); return { status: 0 }; }, write: (line) => output.push(line),
+      });
+      assert.equal(result, 0);
+      const expected = operation === "remove" ? ["remove codex", "remove claude", "remove-cli"]
+        : [operation === "install" ? "install-once" : "update-once", "setup-win codex", "setup-win claude", "second codex", "second claude", "shared-setup"];
+      assert.deepEqual(calls, yes ? expected : []);
+      assert.match(output.join("\n"), /AGENTS: codex, claude-code, alias/);
+      assert.match(output.join("\n"), /agent: claude-code/);
+      if (operation === "remove") assert.match(output.join("\n"), /Full uninstall.*other agents/);
+    }
+  }
+});
+
+test("all agent validation happens before the first selected plugin check", async () => {
+  const invalid = [
+    { agents: ["detected", "codex"] }, { agents: [] }, { agents: null },
+    { agents: ["bad;name"] }, { agents: ["codex"], agentMap: {} },
+    { agents: ["codex"], agentMap: [] }, { agents: ["codex"], agentMap: null },
+    { agents: ["codex"], agentMap: { codex: "bad;value" } },
+    { agents: ["codex"], agentMap: { codex: "" } },
+    { agents: ["codex"], agentMap: { other: "other" } },
+    { setupCommand: "setup {agent}" }, { checkCommand: "check {agent}" },
+    { agents: ["detected"], agentMap: { codex: "codex" } },
+  ];
+  for (const overrides of invalid) {
+    const calls = [];
+    assert.equal(await main(["install", "--all", "--yes"], {
+      catalog: catalog([plugin(), plugin({ name: "invalid", ...overrides })]), env: {},
+      runCheck: () => calls.push("check"), runMutation: () => calls.push("mutation"), write: () => {}, writeError: () => {},
+    }), 1, JSON.stringify(overrides));
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("agent command errors identify the target and stop all subsequent work", async () => {
+  for (const throws of [false, true]) {
+    const calls = [], errors = [];
+    assert.equal(await main(["install", "--all", "--yes"], {
+      catalog: catalog([plugin({ agents: ["codex", "claude-code"], agentMap: { codex: "codex", "claude-code": "claude" }, setupCommand: ["setup {agent}", "never"] }), plugin({ name: "later" })]),
+      env: {}, runCheck: () => ({ status: 0 }), write: () => {}, writeError: (message) => errors.push(message),
+      runMutation: async (command) => { calls.push(command); if (command === "setup claude") { if (throws) throw new Error("spawn failed"); return { status: 7 }; } return { status: 0 }; },
+    }), 1);
+    assert.deepEqual(calls, ["setup codex", "setup claude"]);
+    assert.match(errors.join("\n"), /agent: claude-code/);
+  }
+});
+
+test("detected plugin agents honor environment fallback and explicit override", async () => {
+  const input = catalog([plugin({ agents: ["detected"], agentMap: { codex: "codex", "claude-code": "claude" }, setupCommand: "setup {agent}" })]);
+  for (const [argv, env, expected] of [
+    [[], { MY_SKILLS_AGENT: "codex,codex,claude-code", CLAUDECODE: "1" }, ["codex", "claude-code"]],
+    [["--agent", "codex"], { MY_SKILLS_AGENT: "claude-code" }, ["codex"]],
+    [[], { CLAUDECODE: "1" }, ["claude-code"]],
+  ]) {
+    const plan = await buildInstallPlan(input, parsePluginArgs(["plan", "--all", ...argv]), { env, runCheck: () => ({ status: 0 }) });
+    assert.deepEqual(plan[0].agents, expected);
+  }
+});
+
+test("real plugin catalog resolves all Codex targets without leaving placeholders", async () => {
+  const current = JSON.parse(await readFile(new URL("../pluginset.json", import.meta.url), "utf8"));
+  for (const platform of ["win32", "linux", "darwin"]) {
+    const plan = await buildInstallPlan(current, parsePluginArgs(["plan", "--all"]), {
+      platform, env: { CODEX_THREAD_ID: "test" }, runCheck: () => ({ status: 1 }),
+    });
+    assert.equal(plan.length, 4);
+    for (const item of plan) {
+      assert.deepEqual(item.agents, ["codex"]);
+      assert.ok(item.actions.some((action) => action.stage === "setup" && action.agent === "codex"));
+      assert.ok(item.actions.every((action) => !action.command.includes("{agent}")));
+    }
+  }
+});
+
+test("installed discovery respects custom homes, XDG, legacy aliases and returns evidence", () => {
+  const home = join(process.cwd(), "fake-home");
+  const xdg = join(home, "custom-config");
+  const codex = join(home, "custom-codex"), claude = join(home, "custom-claude");
+  const present = new Set([codex, join(claude, ".claude.json"), join(xdg, "opencode"), join(home, ".cursor"), join(home, ".clawdbot"), join(home, ".moltbot")]);
+  const options = { home, env: { CODEX_HOME: codex, CLAUDE_CONFIG_DIR: claude, XDG_CONFIG_HOME: xdg }, exists: (path) => present.has(path) };
+  const result = detectInstalledAgents(options);
+  assert.deepEqual(result.map(({ agent }) => agent), ["codex", "claude-code", "cursor", "opencode", "openclaw"]);
+  assert.deepEqual(result.find(({ agent }) => agent === "openclaw").paths, [join(home, ".clawdbot"), join(home, ".moltbot")]);
+  assert.throws(() => detectActiveAgents(undefined, options.env, options), /Installed candidates.*codex.*cursor/);
+  assert.deepEqual(detectActiveAgents(undefined, { ...options.env, CODEX_THREAD_ID: "active" }, options), ["codex"]);
+  assert.deepEqual(detectInstalledAgents({ home, env: {}, exists: () => { throw new Error("denied"); } }), []);
+  assert.deepEqual(detectInstalledAgents({ home, env: { XDG_CONFIG_HOME: "relative" }, exists: (path) => path === join(home, ".config", "opencode") }).map(({ agent }) => agent), ["opencode"]);
+});
+
+test("installed selection is opt-in and never falls back or ignores missing mappings", async () => {
+  const home = join(process.cwd(), "fake-home");
+  const input = catalog([plugin({ agents: ["detected"], agentMap: { codex: "codex", cursor: "cursor" }, setupCommand: "setup {agent}" })]);
+  const discovery = { home, exists: (path) => [join(home, ".codex"), join(home, ".cursor")].includes(path) };
+  const calls = [];
+  const options = { catalog: input, env: { CODEX_THREAD_ID: "active" }, discovery, runCheck: () => ({ status: 0 }), runMutation: async (command) => { calls.push(command); return { status: 0 }; }, write: () => {}, writeError: () => {} };
+  assert.equal(await main(["install", "--all", "--yes"], options), 0);
+  assert.deepEqual(calls, ["setup codex"]);
+  calls.length = 0;
+  assert.equal(await main(["install", "--all", "--detect-installed", "--yes"], options), 0);
+  assert.deepEqual(calls, ["setup codex", "setup cursor"]);
+  calls.length = 0;
+  delete input.plugins[0].agentMap.cursor;
+  options.runCheck = () => { calls.push("check"); return { status: 0 }; };
+  assert.equal(await main(["install", "--all", "--detect-installed", "--yes"], options), 1);
+  assert.deepEqual(calls, []);
+  options.discovery = { home, exists: () => false };
+  assert.equal(await main(["install", "--all", "--detect-installed", "--yes"], options), 1);
+  assert.deepEqual(calls, []);
+  assert.throws(() => parsePluginArgs(["plan", "--all", "--agent", "codex", "--detect-installed"]), /mutually exclusive/);
+});
+
 function plugin(overrides = {}) {
   return {
     name: "gitnexus",
@@ -605,11 +751,13 @@ test("current catalog defines the approved plugins without project index command
   const current = JSON.parse(await readFile(new URL("../pluginset.json", import.meta.url), "utf8"));
   validatePluginCatalog(current, { platform: "win32" });
   assert.deepEqual(current.plugins.map((entry) => entry.name), [
+    "graphify",
     "gitnexus",
     "codegraph",
     "codebase-memory-mcp",
   ]);
   assert.deepEqual(current.plugins.map((entry) => entry.profiles), [
+    ["coding2"],
     ["coding1"],
     ["coding2"],
     ["coding2"],
@@ -618,7 +766,7 @@ test("current catalog defines the approved plugins without project index command
   assert.equal(Object.hasOwn(current.profiles, "codebase-memory"), false);
   assert.deepEqual(
     selectPlugins(current, parsePluginArgs(["plan", "--profile", "coding2"])).map((entry) => entry.name),
-    ["codegraph", "codebase-memory-mcp"],
+    ["graphify", "codegraph", "codebase-memory-mcp"],
   );
   const serialized = JSON.stringify(current.plugins);
   for (const forbidden of ["gitnexus analyze", "gitnexus clean", "codegraph init", "codegraph uninit"]) {
@@ -635,7 +783,7 @@ test("codebase-memory removal preserves its interactive prompt before npm remova
   ]) {
     const plan = await buildRemovalPlan(
       current,
-      parsePluginArgs(["remove", "--plugin", "codebase-memory-mcp"]),
+      parsePluginArgs(["remove", "--plugin", "codebase-memory-mcp", "--agent", "codex"]),
       { platform, runCheck: () => ({ status: 0, stdout: "", stderr: "" }) },
     );
     assert.deepEqual(plan[0].actions, [

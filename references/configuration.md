@@ -61,6 +61,26 @@ Each plugin entry has these fields:
 | `uninstallCommands` | Yes | Non-empty ordered array of cleanup commands. |
 | `reviewed` | Yes | Boolean installation trust gate. |
 | `updateCommand` | No | One CommandSpec or a non-empty ordered array; required for the update operation. |
+| `agents` | No | `["detected"]` or a non-empty list of explicit agent names; `detected` must appear alone. |
+| `agentMap` | No | Required for each resolved target when `agents` is present; maps agent names to upstream argument values. |
+
+### Plugin agent targets
+
+```json
+{
+  "agents": ["detected"],
+  "agentMap": { "codex": "codex" },
+  "setupCommand": "graphify install --platform {agent}"
+}
+```
+
+Use explicit names such as `["codex", "claude-code"]` to configure multiple agents. Every actual target must have its own `agentMap` entry, even when commands do not contain placeholders. Map keys, values, and agent names accept only ASCII letters, digits, hyphens, and underscores. Empty maps, arrays, null mappings, and missing mappings are errors. The shipped plugins initially map only `codex`; verify a tool's upstream parameter before adding other mappings.
+
+`--agent a,b` (repeatable) resolves only `detected`; explicitly configured agents are not overridden. Resolution order is CLI override, `MY_SKILLS_AGENT`, then the active Codex or Claude Code environment. Multiple runtime matches or no runtime match are errors. Names are deduplicated in first-seen order.
+
+After selecting the platform, each command containing `{agent}` expands in target order. Arrays execute command-first: command 1 for every target, then command 2. Targets mapping to the same upstream value execute that command once. Commands without `{agent}` execute once, including shared CLI installation, update, and removal. `checkCommand` cannot contain `{agent}`. All selected targets and commands are resolved before any availability check. Errors identify the failed target and stop subsequent commands and plugins.
+
+Legacy entries without `agents` retain their behavior, but cannot contain `{agent}` or `agentMap`. Removal remains a full uninstall: target selection does not protect other agents from shared CLI removal or upstream commands that remove all integrations. The preview explicitly reports this scope; there is no separate `--uninstall-cli` option.
 
 `updateCommand` supports the same string, platform map, and mixed array forms as `installCommand`. Existing catalogs may omit it; selecting an entry without it for `update` fails before mutations. Update requires an available CLI, runs every update command followed by setup, and never falls back to installation.
 

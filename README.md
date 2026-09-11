@@ -127,9 +127,13 @@ scope=<global|project>，agents=detected，required=<true|false>。
 
 ## 外部插件管理
 
-更新插件：`node scripts/manage_plugins.mjs update --plugin codegraph` 预览，追加 `--yes` 实际执行。也支持 `--profile coding2` 或 `--all`。更新按 `updateCommand` → `setupCommand` 顺序执行；任一插件未安装、未配置更新命令或未通过审核时，不执行更新。`updateCommand` 支持字符串、平台对象及混合数组。
+检测方式：默认识别当前会话；`--detect-installed` 则按本机全局配置目录选择所有已安装候选，例如 `node scripts/manage_plugins.mjs plan --profile coding2 --detect-installed`。候选可能包括已卸载工具留下的配置，每个目标仍需 `agentMap`，缺失时会报错。该参数与 `--agent` 互斥。详见 [上游检测源码分析](references/agent-detection.md)。
 
-GitNexus 归入 `coding1`；CodeGraph 和 Codebase Memory MCP 归入 `coding2`。用 `--profile coding2` 可同时选择后两个插件，也可用 `--plugin` 单独选择。
+插件支持 `agents: ["detected"]` 自动识别当前 Codex 或 Claude Code，也可以列出多个明确 agent。`agentMap` 将名称映射为工具参数，命令中的 `{agent}` 按目标逐个展开；不含占位符的共享安装、更新、卸载命令只执行一次。可用 `--agent codex` 显式解析 `detected`，或设置 `MY_SKILLS_AGENT`；显式配置的目标列表不会被覆盖。当前四个插件只录入了已核对的 Codex 映射，其他目标需补充映射后使用。
+
+例如：`node scripts/manage_plugins.mjs plan --profile coding2 --agent codex`。任何目标无法识别或缺少映射时，整个操作会在检查之前停止。`remove` 仍是完整卸载，可能移除共享 CLI 并影响其他 agent，并非仅清理选定目标。
+
+更新插件：`node scripts/manage_plugins.mjs update --plugin codegraph` 预览，追加 `--yes` 实际执行。也支持 `--profile coding2` 或 `--all`。更新按 `updateCommand` → `setupCommand` 顺序执行；任一插件未安装、未配置更新命令或未通过审核时，不执行更新。`updateCommand` 支持字符串、平台对象及混合数组。
 
 `pluginset.json` 顶层的 `plugins` 保存需要执行 CLI 安装、Codex/MCP 配置或卸载命令的外部集成。这类命令管理的集成不是 Codex Marketplace 原生插件，也不经过 `npx skills`；统一使用独立管理器：
 

@@ -22,6 +22,15 @@ Local catalog sources are inventory-only: `plan`/`sync` report `SKIP`, `audit` r
 
 ## External plugin lifecycle
 
+`--detect-installed` opts into global installed-agent discovery for `agents: ["detected"]`. It is mutually exclusive with `--agent`, bypasses `MY_SKILLS_AGENT` and runtime selection, and does not override explicit catalog targets. No candidates or a missing target mapping fails before commands run. See [agent-detection.md](agent-detection.md) for upstream source analysis and supported discovery rules.
+
+Plugin commands accept `--agent codex,claude-code` and repeated `--agent` options to resolve catalog `agents: ["detected"]`; this does not replace the required profile/plugin/all selector and does not override explicit catalog agent lists. Without an override, use `MY_SKILLS_AGENT` or the active runtime. Missing or ambiguous detection and missing mappings fail before any checks. Preview shows target agents and fully expanded commands. Uninstall remains full removal, including shared CLI removal configured in the catalog, and may affect other agents.
+
+```powershell
+node scripts/manage_plugins.mjs plan --profile coding2 --agent codex
+node scripts/manage_plugins.mjs install --plugin graphify --agent codex --yes
+```
+
 Use `node scripts/manage_plugins.mjs update --plugin codegraph` to preview an update, and append `--yes` to execute. Profile and all selectors are also supported. Every selected plugin must define `updateCommand` and pass its availability check; otherwise the entire update stops before mutations. Execution requires `reviewed: true`, runs update commands followed by setup, and stops globally on any failure. This operation updates the CLI, not project indexes. `plan` continues to preview installation.
 
 Route external `plugins` plan, installation, and removal through the separate manager:

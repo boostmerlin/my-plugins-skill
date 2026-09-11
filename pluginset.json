@@ -178,7 +178,24 @@
   ],
   "plugins": [
     {
+      "name": "graphify",
+      "agents": ["detected"],
+      "agentMap": { "codex": "codex" },
+      "profiles": ["coding2"],
+      "checkCommand": "graphify --version",
+      "installCommand": "uv tool install \"graphifyy[mcp]\"",
+      "setupCommand": "graphify install --platform {agent}",
+      "updateCommand": "uv tool upgrade graphifyy",
+      "uninstallCommands": [
+        "graphify uninstall --platform {agent}",
+        "uv tool uninstall graphifyy"
+      ],
+      "reviewed": true
+    },
+    {
       "name": "gitnexus",
+      "agents": ["detected"],
+      "agentMap": { "codex": "codex" },
       "profiles": ["coding1"],
       "checkCommand": {
         "default": "gitnexus --version",
@@ -188,7 +205,7 @@
         "default": "npm install -g gitnexus@latest",
         "win32": "npm.cmd install -g gitnexus@latest"
       },
-      "setupCommand": "gitnexus setup -c codex",
+      "setupCommand": "gitnexus setup -c {agent}",
       "updateCommand": {
         "default": "npm install -g gitnexus@latest",
         "win32": "npm.cmd install -g gitnexus@latest"
@@ -204,13 +221,15 @@
     },
     {
       "name": "codegraph",
+      "agents": ["detected"],
+      "agentMap": { "codex": "codex" },
       "profiles": ["coding2"],
       "checkCommand": "codegraph --version",
       "installCommand": {
         "default": "npm install -g @colbymchenry/codegraph",
         "win32": "npm.cmd install -g @colbymchenry/codegraph"
       },
-      "setupCommand": "codegraph install --target=codex --location=global --yes",
+      "setupCommand": "codegraph install --target={agent} --location=global --yes",
       "updateCommand": "codegraph upgrade",
       "uninstallCommands": [
         "codegraph uninstall --yes"
@@ -219,13 +238,15 @@
     },
     {
       "name": "codebase-memory-mcp",
+      "agents": ["detected"],
+      "agentMap": { "codex": "codex" },
       "profiles": ["coding2"],
       "checkCommand": "codebase-memory-mcp --version",
       "installCommand": {
         "default": "npm install -g codebase-memory-mcp@latest",
         "win32": "npm.cmd install -g codebase-memory-mcp@latest"
       },
-      "setupCommand": "codebase-memory-mcp install --clients=codex -y",
+      "setupCommand": "codebase-memory-mcp install --clients={agent} -y",
       "updateCommand": {
         "default": "npm install -g codebase-memory-mcp@latest",
         "win32": "npm.cmd install -g codebase-memory-mcp@latest"
