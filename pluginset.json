@@ -175,5 +175,69 @@
       "required": false,
       "reviewed": true
     }
+  ],
+  "plugins": [
+    {
+      "name": "gitnexus",
+      "profiles": ["coding1"],
+      "checkCommand": {
+        "default": "gitnexus --version",
+        "win32": "gitnexus.cmd --version"
+      },
+      "installCommand": {
+        "default": "npm install -g gitnexus@latest",
+        "win32": "npm.cmd install -g gitnexus@latest"
+      },
+      "setupCommand": "gitnexus setup -c codex",
+      "updateCommand": {
+        "default": "npm install -g gitnexus@latest",
+        "win32": "npm.cmd install -g gitnexus@latest"
+      },
+      "uninstallCommands": [
+        "gitnexus uninstall --force",
+        {
+          "default": "npm uninstall -g gitnexus",
+          "win32": "npm.cmd uninstall -g gitnexus"
+        }
+      ],
+      "reviewed": true
+    },
+    {
+      "name": "codegraph",
+      "profiles": ["coding2"],
+      "checkCommand": "codegraph --version",
+      "installCommand": {
+        "default": "npm install -g @colbymchenry/codegraph",
+        "win32": "npm.cmd install -g @colbymchenry/codegraph"
+      },
+      "setupCommand": "codegraph install --target=codex --location=global --yes",
+      "updateCommand": "codegraph upgrade",
+      "uninstallCommands": [
+        "codegraph uninstall --yes"
+      ],
+      "reviewed": true
+    },
+    {
+      "name": "codebase-memory-mcp",
+      "profiles": ["coding2"],
+      "checkCommand": "codebase-memory-mcp --version",
+      "installCommand": {
+        "default": "npm install -g codebase-memory-mcp@latest",
+        "win32": "npm.cmd install -g codebase-memory-mcp@latest"
+      },
+      "setupCommand": "codebase-memory-mcp install --clients=codex -y",
+      "updateCommand": {
+        "default": "npm install -g codebase-memory-mcp@latest",
+        "win32": "npm.cmd install -g codebase-memory-mcp@latest"
+      },
+      "uninstallCommands": [
+        "codebase-memory-mcp uninstall",
+        {
+          "default": "npm uninstall -g codebase-memory-mcp",
+          "win32": "npm.cmd uninstall -g codebase-memory-mcp"
+        }
+      ],
+      "reviewed": true
+    }
   ]
 }

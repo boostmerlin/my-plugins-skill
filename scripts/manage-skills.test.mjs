@@ -123,7 +123,7 @@ test("plans local sources as skipped without requiring review or installation", 
 });
 
 test("current catalog groups each multi-skill source into one installation batch", async () => {
-  const catalog = JSON.parse(await readFile(new URL("../skillset.json", import.meta.url), "utf8"));
+  const catalog = JSON.parse(await readFile(new URL("../pluginset.json", import.meta.url), "utf8"));
   const actions = catalog.skills.flatMap((entry) =>
     entry.names.map((name) => ({ action: "install", skill: { ...entry, name } })),
   );

@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const catalogPath = join(root, "skillset.json");
+const catalogPath = join(root, "pluginset.json");
 
 function resolveNpx() {
   if (process.platform !== "win32") return { command: "npx", prefix: [] };

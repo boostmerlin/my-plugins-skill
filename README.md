@@ -1,6 +1,6 @@
 # my-skills-skill
 
-一个交给 Agent 执行的个人 Skill 管理器。它使用 `skillset.json` 保存经过审核的常用 Skill，让你通过自然语言完成检查、规划、环境同步、版本更新和审计。
+一个交给 Agent 执行的个人 Skill 管理器。它使用 `pluginset.json` 保存经过审核的常用 Skill，让你通过自然语言完成检查、规划、环境同步、版本更新和审计。
 
 ## 安装
 
@@ -8,7 +8,7 @@
 npx skills add boostmerlin/my-skills-skill --skill my-skills-skill --global
 ```
 
-推荐先将本仓库 Fork 到自己的 GitHub 账号，再从个人 Fork 安装。这样 `skillset.json` 会成为你自己的、可版本控制的 Skill 清单。
+推荐先将本仓库 Fork 到自己的 GitHub 账号，再从个人 Fork 安装。这样 `pluginset.json` 会成为你自己的、可版本控制的 Skill 清单。
 
 配置字段和规则详见 [`references/configuration.md`](./references/configuration.md)。请保留 `schemaVersion: 1`；通常建议保留 `agents: ["detected"]`，让管理器以当前 Agent 为安装目标。
 
@@ -90,7 +90,7 @@ scope=<global|project>，agents=detected，required=<true|false>。
 ### 导出当前 Skill
 
 ```text
-使用 $my-skills-skill 给出当前非系统 Skill 的 skillset.json 导出方案。
+使用 $my-skills-skill 给出当前非系统 Skill 的 pluginset.json 导出方案。
 ```
 
 ### 确认单个 Skill 的来源
@@ -125,16 +125,35 @@ scope=<global|project>，agents=detected，required=<true|false>。
 使用 $my-skills-skill 从配置移除 <skill-name>，保留本机安装。
 ```
 
+## 外部插件管理
+
+更新插件：`node scripts/manage_plugins.mjs update --plugin codegraph` 预览，追加 `--yes` 实际执行。也支持 `--profile coding2` 或 `--all`。更新按 `updateCommand` → `setupCommand` 顺序执行；任一插件未安装、未配置更新命令或未通过审核时，不执行更新。`updateCommand` 支持字符串、平台对象及混合数组。
+
+GitNexus 归入 `coding1`；CodeGraph 和 Codebase Memory MCP 归入 `coding2`。用 `--profile coding2` 可同时选择后两个插件，也可用 `--plugin` 单独选择。
+
+`pluginset.json` 顶层的 `plugins` 保存需要执行 CLI 安装、Codex/MCP 配置或卸载命令的外部集成。这类命令管理的集成不是 Codex Marketplace 原生插件，也不经过 `npx skills`；统一使用独立管理器：
+
+```powershell
+node scripts/manage_plugins.mjs plan --plugin gitnexus
+node scripts/manage_plugins.mjs plan --profile coding2
+node scripts/manage_plugins.mjs install --profile coding1 --yes
+node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
+```
+
+每次操作必须明确给出 `--profile`、`--plugin` 或 `--all` 其中一个选择器。安装有两道确认门槛：目录项必须是 `reviewed: true`，且执行修改必须显式传入 `--yes`；未传 `--yes` 时只显示包含完整命令的计划。删除只要求 `--yes`，因此未审核条目仍可清理。
+
+管理器按当前平台解析命令，在 Windows 使用 PowerShell，在 Linux 和 macOS 使用 `/bin/sh`。修改命令严格串行执行，任一步失败都会停止整个调用。`codebase-memory-mcp` 的上游卸载命令刻意不传 `-y`，保留其项目索引删除提示；本管理器本身不初始化、刷新或删除项目索引。
+
 ## 当前配置
 
-见 [skillset](./skillset.json)
+见 [skillset](./pluginset.json)
 
 ## Agent 会做什么
 
 收到 Prompt 后，Agent 会根据请求选择以下操作：
 
 1. 检查 Node.js、Git、Skills CLI、配置和当前 Agent。
-2. 将 `skillset.json` 与当前安装状态对比，生成安装与互斥清理计划。
+2. 将 `pluginset.json` 与当前安装状态对比，生成安装与互斥清理计划。
 3. 在任何安装或版本更新前展示计划并等待确认。
 4. 将同来源、同 scope、同目标 Agent、同失败策略的缺失项合并安装。
 5. 安装全部成功后，清理当前目标 Agent 中被替代 Profile 的专属 Skill，并验证删除结果。
@@ -145,9 +164,9 @@ scope=<global|project>，agents=detected，required=<true|false>。
 
 ## 关键行为
 
-### `skillset.json` 是配置源
+### `pluginset.json` 是配置源
 
-应由人审核并纳入版本控制的是 `skillset.json`。它记录：
+应由人审核并纳入版本控制的是 `pluginset.json`。它记录：
 
 - 来源（远程仓库或本机路径）和准确 Skill 名称
 - 所属 Profile
@@ -200,10 +219,12 @@ scope=<global|project>，agents=detected，required=<true|false>。
 my-skills-skill/
 ├── README.md                        用户 Prompt 与使用说明
 ├── SKILL.md                         Agent 执行入口
-├── skillset.json                    受管 Skill 配置源
+├── pluginset.json                    受管 Skill 配置源
 ├── agents/openai.yaml               Codex UI 元数据
 ├── scripts/manage-skills.mjs        确定性管理脚本
 ├── scripts/manage-skills.test.mjs   批处理逻辑测试
+├── scripts/manage_plugins.mjs       外部插件命令管理器
+├── scripts/manage_plugins.test.mjs  外部插件管理器测试
 └── references/
     ├── configuration.md             配置和 Agent 目录规则
     ├── operations.md                操作流程与安全约束

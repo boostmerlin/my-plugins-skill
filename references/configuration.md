@@ -1,6 +1,6 @@
 # Catalog configuration
 
-`skillset.json` is the version-controlled source of truth. Never add generated paths, credentials, system Skills, or plugin-cache Skills.
+`pluginset.json` is the version-controlled source of truth. Never add generated paths, credentials, system Skills, or plugin-cache Skills.
 
 ```json
 {
@@ -43,7 +43,60 @@
 - `required: true` stops sync when its installation batch fails; optional failures are summarized and also prevent cleanup.
 - `reviewed: true` is required for installation. Provenance confidence and content review are separate decisions.
 
+## External plugins
+
+Optional `setupCommand` and `updateCommand` may be omitted or set to JSON `null`. A null setup command is skipped; a null update command means updates are unsupported and an explicit update request fails before mutations. Required command fields, command array elements, and platform-map values cannot be null. Empty strings, objects, and arrays remain invalid.
+
+The same `pluginset.json` may contain a top-level `plugins` array without changing the catalog version: `schemaVersion` remains `1`. Plugin entries are consumed only by `scripts/manage_plugins.mjs`; the existing Skill manager continues to operate on `skills`.
+
+Each plugin entry has these fields:
+
+| Field | Required | Rule |
+| --- | --- | --- |
+| `name` | Yes | Non-empty identifier, globally unique case-insensitively across plugins. |
+| `profiles` | Yes | Non-empty array; every name must exist in the shared top-level `profiles` object. |
+| `checkCommand` | Yes | Read-only availability check; exit status zero means the CLI is present. |
+| `installCommand` | Yes | One CommandSpec or a non-empty ordered array of CommandSpec values to install the CLI or binary. |
+| `setupCommand` | No | One CommandSpec or a non-empty ordered array of CommandSpec values to configure the integration. |
+| `uninstallCommands` | Yes | Non-empty ordered array of cleanup commands. |
+| `reviewed` | Yes | Boolean installation trust gate. |
+| `updateCommand` | No | One CommandSpec or a non-empty ordered array; required for the update operation. |
+
+`updateCommand` supports the same string, platform map, and mixed array forms as `installCommand`. Existing catalogs may omit it; selecting an entry without it for `update` fails before mutations. Update requires an available CLI, runs every update command followed by setup, and never falls back to installation.
+
+`checkCommand` and every member of `uninstallCommands` use one `CommandSpec`. `installCommand` and optional `setupCommand` accept either one `CommandSpec` or a non-empty array of them:
+
+```text
+CommandSpec = non-empty string
+            | {
+                default?: non-empty string,
+                win32?: non-empty string,
+                linux?: non-empty string,
+                darwin?: non-empty string
+              }
+```
+
+For a platform map, the manager first selects the key equal to `process.platform`, then falls back to `default`. If neither exists for the current platform, validation fails. Unknown platform keys and empty command strings are invalid.
+
+Before any command runs, validation rejects duplicate plugin names, empty arrays, unknown profile references, missing required fields, unknown plugin fields, and non-boolean `reviewed` values. Plugin profile membership does not inherit `defaultProfiles`; callers must explicitly select a profile, plugin name, or `--all`.
+
+Command arrays may mix strings and platform maps. Nested arrays and empty arrays are invalid. Commands execute in array order, with all installation commands preceding setup commands. Any failure stops the entire invocation. When the availability check succeeds, all installation commands are skipped; setup commands still run. Each command uses a separate shell process, so shell variables and directory changes do not carry over to the next command.
+
+```json
+{
+  "installCommand": [
+    {
+      "default": "npm install -g some-tool",
+      "win32": "npm.cmd install -g some-tool"
+    },
+    "some-tool download-runtime"
+  ],
+  "setupCommand": "some-tool setup"
+}
+```
+
 ## Exclusive profiles
+
 
 Explicitly selecting two members of one group is rejected before runtime detection or installation inspection:
 

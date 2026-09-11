@@ -1,6 +1,6 @@
 # Operations
 
-Run the script by absolute path while keeping the target project as the working directory. It reads the adjacent `skillset.json`; Skills CLI derives project scope from the working directory.
+Run the script by absolute path while keeping the target project as the working directory. It reads the adjacent `pluginset.json`; Skills CLI derives project scope from the working directory.
 
 ## Inspection
 
@@ -19,6 +19,28 @@ node scripts/manage-skills.mjs sources [skill ...] [--json] [--verify-remote]
 `--profile` accepts comma-separated profiles. Repeated values and repeated `--profile` options are merged with first-seen order preserved. `--all` cannot be combined with `--profile`. For `plan` and `sync`, it selects every ordinary profile plus the configured default from each exclusive group. For full-catalog `audit`, it selects every configured profile, including all mutually exclusive variants. `detected` resolves to the active runtime; outside a recognized session, pass `--agent` or set `MY_SKILLS_AGENT`. It never resolves to `*`, though shared CLI storage may expose a Skill to compatible agents.
 
 Local catalog sources are inventory-only: `plan`/`sync` report `SKIP`, `audit` reports `LOCAL`, and sync neither installs nor removes them. `audit` exits `1` on drift; `sources` exits `1` on unresolved provenance or operational errors. Both only report.
+
+## External plugin lifecycle
+
+Use `node scripts/manage_plugins.mjs update --plugin codegraph` to preview an update, and append `--yes` to execute. Profile and all selectors are also supported. Every selected plugin must define `updateCommand` and pass its availability check; otherwise the entire update stops before mutations. Execution requires `reviewed: true`, runs update commands followed by setup, and stops globally on any failure. This operation updates the CLI, not project indexes. `plan` continues to preview installation.
+
+Route external `plugins` plan, installation, and removal through the separate manager:
+
+```powershell
+node scripts/manage_plugins.mjs plan --plugin gitnexus
+node scripts/manage_plugins.mjs install --profile coding1 --yes
+node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
+```
+
+Every operation requires exactly one of `--profile <a,b>`, `--plugin <a,b>`, or `--all`; the selectors are mutually exclusive and omission is an error. Names are comma-separated, trimmed, deduplicated, and selected plugins retain catalog order. The manager never falls back to `defaultProfiles`.
+
+`plan` and the planning stage of install/remove run only each selected plugin's read-only `checkCommand`. A failed check means installation is needed; it is not itself an error. Install runs `installCommand` only after a failed check, then runs `setupCommand` when present. Setup also runs when the check succeeds so existing Codex/MCP integration can be repaired.
+
+Without `--yes`, install and remove display the exact resolved commands and perform no mutation. Installation additionally requires every selected entry to have `reviewed: true`; removal has no review gate, so an unreviewed entry can still be cleaned up. All mutation commands run sequentially, and any install, setup, or uninstall failure stops the entire invocation before later actions or plugins.
+
+The plugin manager does not manage project indexes. It must never run or add `gitnexus analyze`, `gitnexus clean --all`, `codegraph init`, or `codegraph uninit`. `codebase-memory-mcp uninstall` intentionally runs without `-y`, preserving the upstream interactive choice about deleting indexes; its npm removal runs only after that command succeeds.
+
+These command-managed integrations are separate from native Codex Marketplace plugins. Do not route Marketplace connection or removal through `manage_plugins.mjs`.
 
 ## Environment sync
 
