@@ -53,19 +53,19 @@ Agent 会选择所有普通 Profile，以及每个互斥组中配置的默认 Pr
 ### 同步到指定 Profile
 
 ```text
-使用 $my-plugins-skill 将当前环境同步到 core 和 coding2 Profile。
+使用 $my-plugins-skill 将当前环境同步到 core 和 superpowers Profile。
 ```
 
 ### 只查看计划
 
 ```text
-使用 $my-plugins-skill 查看同步到 core 和 coding2 Profile 的计划，不执行修改。
+使用 $my-plugins-skill 查看同步到 core 和 superpowers Profile 的计划，不执行修改。
 ```
 
 ### 审计指定 Profile 环境
 
 ```text
-使用 $my-plugins-skill 审计当前 coding2 Profile 环境。
+使用 $my-plugins-skill 审计当前 superpowers Profile 环境。
 ```
 
 ### 查找新的 Skill
@@ -119,6 +119,10 @@ scope=<global|project>，agents=detected，required=<true|false>。
 
 “更新”只升级已安装受管 Skill 的版本，不执行 Profile 同步或互斥清理。
 
+### 安装配置之外的 Skill
+
+安装某个 Skill 前，Agent 会先核对当前 `pluginset.json`。如果该 Skill 不在配置中，必须先读取并使用 `find-skills` 技能，按其流程查找、核验来源并处理安装，而不是直接绕过技能执行搜索命令。安装配置外 Skill 不会自动将它加入受管配置，也不会清理互斥方案；只有明确要求纳管时才修改配置。
+
 ### 从配置移除但保留本机安装
 
 ```text
@@ -127,20 +131,35 @@ scope=<global|project>，agents=detected，required=<true|false>。
 
 ## 外部插件管理
 
-检测方式：默认识别当前会话；`--detect-installed` 则按本机全局配置目录选择所有已安装候选，例如 `node scripts/manage_plugins.mjs plan --profile coding2 --detect-installed`。候选可能包括已卸载工具留下的配置，每个目标仍需 `agentMap`，缺失时会报错。该参数与 `--agent` 互斥。详见 [上游检测源码分析](references/agent-detection.md)。
+未限定对象地说“执行某命令”时，Agent 默认检查两个管理器：两边都支持就分别执行，只有一边支持才执行单边，并说明另一边不支持。不会仅因上一轮讨论插件而漏掉 Skills。明确指定对象、资源名称或脚本命令时，以明确范围为准。`plan/install/remove/sync` 两边均支持；`doctor/audit/sources` 当前仅 Skills 支持，管理器的 `update` 命令仅 Plugins 支持。不带选择器地说“执行 plan”，默认运行两边的 `plan --all`；修改命令保留指定范围和授权，不擅自追加 `--all` 或 `--yes`。
 
-插件支持 `agents: ["detected"]` 自动识别当前 Codex 或 Claude Code，也可以列出多个明确 agent。`agentMap` 将名称映射为工具参数，命令中的 `{agent}` 按目标逐个展开；不含占位符的共享安装、更新、卸载命令只执行一次。可用 `--agent codex` 显式解析 `detected`，或设置 `MY_SKILLS_AGENT`；显式配置的目标列表不会被覆盖。当前四个插件只录入了已核对的 Codex 映射，其他目标需补充映射后使用。
+两个管理器均支持 `install`、`remove`、`sync`。`install` 只安装所选项，`remove` 只卸载所选项，两者都允许同组方案共存或批量操作，不额外清理其他项。`install --all` 和 `remove --all` 选择全部纳管项。只有 `sync` 执行状态同步；`plan` 预览同步计划。所有修改命令不传 `--yes` 都只预览，包括仅清理的同步。
 
-例如：`node scripts/manage_plugins.mjs plan --profile coding2 --agent codex`。任何目标无法识别或缺少映射时，整个操作会在检查之前停止。`remove` 仍是完整卸载，可能移除共享 CLI 并影响其他 agent，并非仅清理选定目标。
+受管范围只由当前 `pluginset.json` 定义：删除配置条目后就不再管理其安装，不保留历史受管记录。`sync --profile superpowers` 只同步所选方案并清理同组被替代项，保留 `core`、`docs`、`marketing` 等其他 Profile 和未纳管项。
 
-更新插件：`node scripts/manage_plugins.mjs update --plugin codegraph` 预览，追加 `--yes` 实际执行。也支持 `--profile coding2` 或 `--all`。更新按 `updateCommand` → `setupCommand` 顺序执行；任一插件未安装、未配置更新命令或未通过审核时，不执行更新。`updateCommand` 支持字符串、平台对象及混合数组。
+Skill 示例：`node scripts/manage-skills.mjs install --profile mattpocock,superpowers --yes` 可同时安装两套方案；`node scripts/manage-skills.mjs remove --profile superpowers --yes` 显式卸载所选条目，其中包含的共享 Skill 也会列入卸载计划。本地来源跳过，未纳管条目保留。Skill 卸载必须指定 `--profile` 或 `--all`。
+
+三个插件分别使用同名 Profile：`gitnexus`、`codegraph`、`codebase-memory-mcp`，属于 `codegraph` 互斥组，默认项为 `codegraph`。工作流 `mattpocock` 与 `superpowers` 仍属于独立的 `coding` 组，可以将一个工作流与一个插件搭配使用；仅选择工作流 Profile 不再选中插件。
+
+插件的 `plan`、`sync` 不允许同时选择同组不同方案，`--plugin` 也遵守该规则。它们的 `--all` 选择普通 Profile 和各互斥组默认项对应的插件，当前会选中 `codegraph`。`install`、`update`、`remove` 忽略互斥且不额外清理其他项；这三个命令的 `--all` 选择全部三个插件。
+
+同步计划会列出同组旧插件的清理命令。执行 `sync --yes` 后，先完成所有所选插件的安装与配置，并检查新插件可用，再卸载已安装的旧插件、检查其不再可用。前半程失败时保留旧插件；清理失败立即停止，报告已完成和待执行动作，不自动回滚。只自动清理单一被替代 Profile 专属的插件；共享、其他组和未纳管插件保留。验证使用 CLI 可用性检查，不保证上游残留配置已清除。需要替换旧方案时，请将原先的插件 `install` 命令改为 `sync`。
+
+检测方式：默认识别当前会话；`--detect-installed` 则按本机全局配置目录选择所有已安装候选，例如 `node scripts/manage_plugins.mjs plan --profile codegraph --detect-installed`。候选可能包括已卸载工具留下的配置，每个目标仍需 `agentMap`，缺失时会报错。该参数与 `--agent` 互斥。详见 [上游检测源码分析](references/agent-detection.md)。
+
+插件支持 `agents: ["detected"]` 自动识别当前 Codex 或 Claude Code，也可以列出多个明确 agent。`agentMap` 将名称映射为工具参数，命令中的 `{agent}` 按目标逐个展开；不含占位符的共享安装、更新、卸载命令只执行一次。可用 `--agent codex` 显式解析 `detected`，或设置 `MY_SKILLS_AGENT`；显式配置的目标列表不会被覆盖。当前三个插件只录入了已核对的 Codex 映射，其他目标需补充映射后使用。
+
+例如：`node scripts/manage_plugins.mjs plan --profile codegraph --agent codex`。任何目标无法识别或缺少映射时，整个操作会在检查之前停止。`remove` 仍是完整卸载，可能移除共享 CLI 并影响其他 agent，并非仅清理选定目标。
+
+更新插件：`node scripts/manage_plugins.mjs update --plugin codegraph` 预览，追加 `--yes` 实际执行。也支持 `--profile codegraph` 或 `--all`。更新按 `updateCommand` → `setupCommand` 顺序执行；任一插件未安装、未配置更新命令或未通过审核时，不执行更新。`updateCommand` 支持字符串、平台对象及混合数组。
 
 `pluginset.json` 顶层的 `plugins` 保存需要执行 CLI 安装、Codex/MCP 配置或卸载命令的外部集成。这类命令管理的集成不是 Codex Marketplace 原生插件，也不经过 `npx skills`；统一使用独立管理器：
 
 ```powershell
 node scripts/manage_plugins.mjs plan --plugin gitnexus
-node scripts/manage_plugins.mjs plan --profile coding2
-node scripts/manage_plugins.mjs install --profile coding1 --yes
+node scripts/manage_plugins.mjs plan --profile codegraph
+node scripts/manage_plugins.mjs install --profile gitnexus --yes
+node scripts/manage_plugins.mjs sync --profile codegraph --yes
 node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 ```
 
@@ -158,13 +177,13 @@ node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 
 1. 检查 Node.js、Git、Skills CLI、配置和当前 Agent。
 2. 将 `pluginset.json` 与当前安装状态对比，生成安装与互斥清理计划。
-3. 在任何安装或版本更新前展示计划并等待确认。
+3. 在修改前展示计划，获得授权后执行；已有明确授权无需再次确认。
 4. 将同来源、同 scope、同目标 Agent、同失败策略的缺失项合并安装。
-5. 安装全部成功后，清理当前目标 Agent 中被替代 Profile 的专属 Skill，并验证删除结果。
+5. 同步时，在安装全部成功后清理当前目标 Agent 中被替代 Profile 的专属 Skill，并验证删除结果；单独安装不会触发清理。
 6. 审计缺失项、互斥冲突、链接问题和未纳管项。
 7. 导出前交叉检查 CLI 元数据、lock 记录和本地 Git 证据，并展示可信等级。
 
-只读操作不会改变安装状态。同步和版本更新属于修改操作；同步清理不增加独立确认，只有清理动作时，显式同步请求本身就是授权。
+只读操作不会改变安装状态。两个管理器的修改命令必须传入 `--yes` 才执行；不传时只预览，只有清理动作的同步也不例外。
 
 ## 关键行为
 
@@ -202,9 +221,13 @@ node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 
 ### 自动识别当前 Agent
 
-配置中的 `agents: ["detected"]` 表示让管理器把当前运行 Agent 传给 Skills CLI，而不是使用 `--agent '*'`。目前能够从运行时标记自动识别 Codex 和 Claude Code；无法识别或检测结果冲突时，Agent 会要求你明确目标。
+配置中的 `agents: ["detected"]` 表示让管理器把当前运行 Agent 传给 Skills CLI，而不是使用 `--agent '*'`。目前能够从运行时标记自动识别 **Codex**、**Claude Code**（`CLAUDECODE === "1"`）以及 **WorkBuddy / CodeBuddy**。WorkBuddy 桌面端或底层 CodeBuddy CLI 运行时会被识别为 Skills CLI 的 `codebuddy` 目标（而非 `workbuddy`，因为 Skills CLI 只接受 `codebuddy` 这一 id，用 `workbuddy` 安装会失败）。无法识别或检测结果冲突（例如同时出现 Codex 与 CodeBuddy 标记）时，Agent 会要求你明确目标。
+
+> 注意：WorkBuddy 会向会话注入 Claude Code 兼容变量（如 `CLAUDE_SESSION_ID`），但这些只作兼容用途，不会让检测器误判为 `claude-code`——只有 `CLAUDECODE === "1"` 才算 claude-code 的活动证据。
 
 指定 Codex 不代表其他 Agent 一定看不到该 Skill。Skills CLI 可能把内容存入共享的 `~/.agents/skills/`，使 Cursor、GitHub Copilot 等兼容 Agent 同样可见。`detected` 保证的是请求的安装目标，不保证目录隔离。
+
+另外，Skills CLI 对 `codebuddy` 硬编码写入 `~/.codebuddy/skills`，而 CodeBuddy/WorkBuddy 运行时读取 `$CODEBUDDY_CONFIG_DIR/skills`（默认也是 `~/.codebuddy`）。当宿主把该目录重定向（例如指向 `~/.workbuddy`）时，全局安装会落到扫描路径之外。`doctor` 会对此发出 `[WARN]`，提示两个路径不一致；此时可设置 `CODEBUDDY_CONFIG_DIR=~/.codebuddy` 或把重定向目录链接回 `~/.codebuddy`，使写入路径与扫描路径一致。
 
 ## 安全边界
 

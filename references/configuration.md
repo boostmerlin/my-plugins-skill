@@ -2,6 +2,8 @@
 
 `pluginset.json` is the version-controlled source of truth. Never add generated paths, credentials, system Skills, or plugin-cache Skills.
 
+Only entries in the current catalog are managed. Deleting an entry ends management of its installation; there is no historical ownership registry. Sync applies the selected profiles and their displaced same-group peers, preserving unrelated profiles and uncatalogued installations.
+
 ```json
 {
   "schemaVersion": 1,
@@ -45,6 +47,18 @@
 
 ## External plugins
 
+### Exclusive plugin profiles
+
+The shipped plugins each use their own same-name profile: `gitnexus`, `codegraph`, and `codebase-memory-mcp`. All three have `exclusiveGroup: "codegraph"`; only profile `codegraph` has `defaultInExclusiveGroup: true`. The existing `mattpocock` and `superpowers` profiles remain in the separate `coding` group. Selecting a workflow alone no longer selects a plugin.
+
+The plugin manager validates non-empty, case-sensitive group names (trimming surrounding whitespace), at least two members per group, and exactly one boolean default. `plan` and `sync` reject incompatible explicit profiles and plugin selections before any checks. Multiple profiles on a shared plugin mean alternatives, not a requirement to select every profile. For plan/sync, `--all` selects plugins belonging to ordinary profiles or each group's default, once per plugin. `install`, `update`, and `remove` allow conflicting members; their `--all` selects every plugin. Ignoring exclusivity does not bypass catalog validation.
+
+Only sync plans (including the `plan` preview) include installed conflicting plugins owned by a single displaced profile. Shared plugins (multiple distinct profile memberships), unrelated plugins, and unmanaged tools are never automatic cleanup targets. All selected and cleanup target mappings and commands resolve before availability checks. A nonzero check status means unavailable; a check that cannot execute aborts planning. Install and update inspect only selected entries and never clean up peers.
+
+Automatic cleanup requires a uniquely determined profile in the group. Selecting only a shared plugin whose memberships leave multiple alternatives does not implicitly choose one or trigger cleanup in that group; select a specific profile or a compatible single-profile plugin to make the choice explicit.
+
+With `sync --yes`, all selected install and setup commands succeed first. During an exclusive selection, all selected plugins must then pass their availability checks before any cleanup starts. Cleanup executes existing uninstall commands in catalog order and checks each removed plugin is unavailable. Any failure stops the invocation and reports completed and pending actions without rollback. Cleanup does not require the old entry to be reviewed. Full uninstall may remove shared CLI integrations for other agents; verification does not detect residual upstream configuration. Every modification command without `--yes` only previews, including cleanup-only sync.
+
 Optional `setupCommand` and `updateCommand` may be omitted or set to JSON `null`. A null setup command is skipped; a null update command means updates are unsupported and an explicit update request fails before mutations. Required command fields, command array elements, and platform-map values cannot be null. Empty strings, objects, and arrays remain invalid.
 
 The same `pluginset.json` may contain a top-level `plugins` array without changing the catalog version: `schemaVersion` remains `1`. Plugin entries are consumed only by `scripts/manage_plugins.mjs`; the existing Skill manager continues to operate on `skills`.
@@ -70,7 +84,7 @@ Each plugin entry has these fields:
 {
   "agents": ["detected"],
   "agentMap": { "codex": "codex" },
-  "setupCommand": "graphify install --platform {agent}"
+  "setupCommand": "codegraph install --target={agent} --location=global --yes"
 }
 ```
 
@@ -116,6 +130,8 @@ Command arrays may mix strings and platform maps. Nested arrays and empty arrays
 ```
 
 ## Exclusive profiles
+
+Skills `install` and `remove` allow same-group profiles together and never perform automatic peer cleanup. Their `--all` selects every profile. Install without a selector uses `defaultProfiles`; remove must specify `--profile` or `--all`. Explicit removal selects catalog entries even if shared with other profiles, displays their memberships, removes only installed links for the resolved configured agents and scope, and verifies each removal batch before proceeding. Missing entries and local sources are skipped. Removal does not require `reviewed: true`; uncatalogued Skills are not touched. Without `--yes`, installation, removal and sync only preview; there is no interactive confirmation or cleanup-only exception.
 
 
 Explicitly selecting two members of one group is rejected before runtime detection or installation inspection:

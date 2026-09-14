@@ -22,7 +22,7 @@ Show the selected profiles, target agent, scope, total skills, and batch count b
 
 **23 个 Skill · 9 个安装批次 · 3 个待清理 · 全局同步至 `codex`**
 
-Profile：`core` · `coding2`
+Profile：`core` · `superpowers`
 
 | 动作 | 来源 | Skill |
 |---|---|---|
@@ -53,7 +53,7 @@ Lead with installed versus planned counts. Summarize profile results in a table 
 | Profile | 结果 |
 |---|---:|
 | `core` | ✓ 完成 |
-| `coding2` | ✓ 完成 |
+| `superpowers` | ✓ 完成 |
 
 ### 审计
 

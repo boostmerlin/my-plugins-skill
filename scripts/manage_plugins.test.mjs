@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { detectActiveAgents, detectInstalledAgents } from "./agent-detection.mjs";
+import { codebuddyGlobalSkillsMismatch, detectActiveAgents, detectInstalledAgents } from "./agent-detection.mjs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,265 @@ import {
   shellInvocation,
   validatePluginCatalog,
 } from "./manage_plugins.mjs";
+
+function exclusiveCatalog() {
+  return {
+    schemaVersion: 1,
+    profiles: {
+      a: { exclusiveGroup: "graphs", defaultInExclusiveGroup: true },
+      b: { exclusiveGroup: "graphs" },
+      c: { exclusiveGroup: "graphs" },
+      core: {},
+    },
+    plugins: ["a", "b", "c"].map((name) => ({
+      name, profiles: [name], reviewed: true,
+      checkCommand: `check ${name}`, installCommand: `install ${name}`,
+      setupCommand: `setup ${name}`, updateCommand: `update ${name}`,
+      uninstallCommands: [`remove ${name}`],
+    })),
+  };
+}
+
+test("install and update allow exclusive plugins together without peer checks or cleanup", async () => {
+  for (const command of ["install", "update"]) {
+    for (const selector of [["--all"], ["--profile", "a,b,c"], ["--plugin", "a,b,c"]]) {
+      for (const yes of [false, true]) {
+        const calls = [];
+        assert.equal(await main([command, ...selector, ...(yes ? ["--yes"] : [])], {
+          catalog: exclusiveCatalog(),
+          runCheck: (check) => { calls.push(check); return { status: command === "update" ? 0 : 1 }; },
+          runMutation: (mutation) => { calls.push(mutation); return { status: 0 }; },
+          write: () => {}, writeError: (error) => assert.fail(error),
+        }), 0);
+        assert.deepEqual(calls, ["check a", "check b", "check c", ...(yes ? [
+          `${command} a`, "setup a", `${command} b`, "setup b", `${command} c`, "setup c",
+        ] : [])]);
+      }
+    }
+  }
+  const checks = [];
+  const plan = await buildInstallPlan(exclusiveCatalog(), parsePluginArgs(["install", "--plugin", "a"]), {
+    runCheck: (command) => { checks.push(command); return { status: 0 }; },
+  });
+  assert.deepEqual(checks, ["check a"]);
+  assert.deepEqual(plan.flatMap((item) => item.actions.map((a) => a.command)), ["setup a"]);
+});
+
+test("plugin cleanup-only sync requires yes and leaves unrelated profiles alone", async () => {
+  const input = exclusiveCatalog();
+  input.plugins[0].setupCommand = null;
+  input.plugins.push({ ...input.plugins[0], name: "unrelated", profiles: ["core"], checkCommand: "check unrelated" });
+  const installed = new Set(["a", "b", "unrelated", "deleted-from-catalog"]), calls = [];
+  const dependencies = {
+    catalog: input,
+    runCheck: (command) => ({ status: installed.has(command.split(" ")[1]) ? 0 : 1 }),
+    runMutation: (command) => { calls.push(command); installed.delete(command.split(" ")[1]); return { status: 0 }; },
+    write: () => {}, writeError: (error) => assert.fail(error),
+  };
+  assert.equal(await main(["sync", "--profile", "a"], dependencies), 0);
+  assert.deepEqual(calls, []);
+  assert.equal(await main(["sync", "--profile", "a", "--yes"], dependencies), 0);
+  assert.deepEqual(calls, ["remove b"]);
+  assert.deepEqual([...installed], ["a", "unrelated", "deleted-from-catalog"]);
+});
+
+test("exclusive plugins reject conflicting selections before checks and allow batch removal", async () => {
+  for (const command of ["plan", "sync"]) {
+    for (const selector of ["--profile", "--plugin"]) {
+      let checks = 0;
+      const errors = [];
+      assert.equal(await main([command, selector, "a,b", "--yes"], {
+        catalog: exclusiveCatalog(), runCheck: () => { checks++; return { status: 0 }; },
+        runMutation: () => assert.fail("must not mutate"), write: () => {}, writeError: (error) => errors.push(error),
+      }), 1);
+      assert.equal(checks, 0);
+      assert.match(errors.join("\n"), /exclusive/i);
+    }
+  }
+  assert.deepEqual(selectPlugins(exclusiveCatalog(), parsePluginArgs(["plan", "--all"])).map((p) => p.name), ["a"]);
+  assert.equal(selectPlugins(exclusiveCatalog(), parsePluginArgs(["remove", "--all"])).length, 3);
+  assert.equal(selectPlugins(exclusiveCatalog(), parsePluginArgs(["remove", "--profile", "a,b"])).length, 2);
+});
+
+test("exclusive group validation requires multiple members and exactly one default", () => {
+  for (const mutate of [
+    (c) => { delete c.profiles.a.defaultInExclusiveGroup; },
+    (c) => { c.profiles.b.defaultInExclusiveGroup = true; },
+    (c) => { c.profiles.b.exclusiveGroup = "alone"; },
+    (c) => { c.profiles.core.defaultInExclusiveGroup = true; },
+    (c) => { c.profiles.a.exclusiveGroup = " "; },
+  ]) {
+    const input = exclusiveCatalog(); mutate(input);
+    assert.throws(() => validatePluginCatalog(input), /exclusive/i);
+  }
+});
+
+test("exclusive switch previews cleanup and verifies new installation before removing old plugins", async () => {
+  for (const execute of [false, true]) {
+    const installed = new Set(["b", "c"]);
+    const events = [], output = [];
+    assert.equal(await main(["sync", "--plugin", "a", ...(execute ? ["--yes"] : [])], {
+      catalog: exclusiveCatalog(),
+      runCheck: (command) => { events.push(command); return { status: installed.has(command.split(" ")[1]) ? 0 : 1 }; },
+      runMutation: (command) => {
+        events.push(command);
+        const [action, name] = command.split(" ");
+        if (action === "install") installed.add(name);
+        if (action === "remove") installed.delete(name);
+        return { status: 0 };
+      },
+      write: (line) => output.push(line), writeError: (error) => assert.fail(error),
+    }), 0);
+    assert.match(output.join("\n"), /remove b/);
+    assert.match(output.join("\n"), /shared CLI/);
+    assert.deepEqual(events, execute
+      ? ["check a", "check b", "check c", "install a", "setup a", "check a", "remove b", "check b", "remove c", "check c"]
+      : ["check a", "check b", "check c"]);
+  }
+});
+
+test("exclusive switch stops on failed install, setup, verification or cleanup with progress", async () => {
+  for (const failure of ["install a", "setup a", "verify a", "remove b", "verify b"]) {
+    const installed = new Set(["b", "c"]), mutations = [], errors = [];
+    const code = await main(["sync", "--plugin", "a", "--yes"], {
+      catalog: exclusiveCatalog(),
+      runCheck: (command) => ({ status: installed.has(command.split(" ")[1]) ? 0 : 1 }),
+      runMutation: (command) => {
+        mutations.push(command);
+        if (command === failure) return { status: 1 };
+        if (command === "install a" && failure !== "verify a") installed.add("a");
+        if (command === "remove b" && failure !== "verify b") installed.delete("b");
+        return { status: 0 };
+      }, write: () => {}, writeError: (error) => errors.push(error),
+    });
+    assert.equal(code, 1, failure);
+    assert.ok(!mutations.includes("remove c"), failure);
+    if (["install a", "setup a", "verify a"].includes(failure)) assert.ok(!mutations.includes("remove b"));
+    assert.match(errors.join("\n"), /Completed:/);
+    assert.match(errors.join("\n"), /Pending:/);
+  }
+});
+
+test("exclusive cleanup preserves shared and unrelated plugins", async () => {
+  const input = exclusiveCatalog();
+  input.plugins.push(
+    { ...input.plugins[1], name: "shared", profiles: ["a", "b"], checkCommand: "check shared" },
+    { ...input.plugins[1], name: "ordinary", profiles: ["core", "b"], checkCommand: "check ordinary" },
+    { ...input.plugins[1], name: "other-shared", profiles: ["b", "c"], checkCommand: "check other-shared" },
+  );
+  const checks = [];
+  const plan = await buildInstallPlan(input, parsePluginArgs(["plan", "--plugin", "a"]), {
+    runCheck: (command) => { checks.push(command); return { status: 0 }; },
+  });
+  assert.deepEqual(checks, ["check a", "check b", "check c"]);
+  assert.deepEqual(plan.filter((item) => item.cleanup).map((item) => item.name), ["b", "c"]);
+  assert.deepEqual(selectPlugins(input, parsePluginArgs(["plan", "--plugin", "a,shared"])).map((p) => p.name), ["a", "shared"]);
+});
+
+test("exclusive cleanup resolves every mapping before any check", async () => {
+  const input = exclusiveCatalog();
+  Object.assign(input.plugins[1], { agents: ["codex"], agentMap: { cursor: "cursor" } });
+  await assert.rejects(buildInstallPlan(input, parsePluginArgs(["plan", "--plugin", "a"]), {
+    runCheck: () => assert.fail("mapping error must precede checks"),
+  }), /missing agentMap/);
+});
+
+test("exclusive sync of an installed target cleans up conflicts after verification", async () => {
+  for (const operation of ["sync"]) {
+    const installed = new Set(["a", "b"]), events = [];
+    assert.equal(await main([operation, "--plugin", "a", "--yes"], {
+      catalog: exclusiveCatalog(),
+      runCheck: (command) => { events.push(command); return { status: installed.has(command.split(" ")[1]) ? 0 : 1 }; },
+      runMutation: (command) => { events.push(command); if (command === "remove b") installed.delete("b"); return { status: 0 }; },
+      write: () => {}, writeError: (error) => assert.fail(error),
+    }), 0);
+    assert.deepEqual(events, ["check a", "check b", "check c", ...(operation === "update" ? ["update a"] : []), "setup a", "check a", "remove b", "check b"]);
+  }
+});
+
+test("exclusive cleanup waits for every selected plugin to succeed", async () => {
+  const input = exclusiveCatalog();
+  input.plugins.push({ ...input.plugins[0], name: "extra", profiles: ["core"], installCommand: "install extra", setupCommand: "setup extra" });
+  const mutations = [];
+  assert.equal(await main(["sync", "--profile", "a,core", "--yes"], {
+    catalog: input, runCheck: (command) => ({ status: command === "check b" ? 0 : 1 }),
+    runMutation: (command) => { mutations.push(command); return { status: command === "setup extra" ? 1 : 0 }; },
+    write: () => {}, writeError: () => {},
+  }), 1);
+  assert.deepEqual(mutations, ["install a", "setup a", "install extra", "setup extra"]);
+});
+
+test("shared-only selection does not implicitly choose an exclusive profile for cleanup", async () => {
+  const input = exclusiveCatalog();
+  input.plugins.push({ ...input.plugins[0], name: "shared", profiles: ["a", "b"], checkCommand: "check shared" });
+  const checks = [];
+  const plan = await buildInstallPlan(input, parsePluginArgs(["plan", "--plugin", "shared"]), {
+    runCheck: (command) => { checks.push(command); return { status: 0 }; },
+  });
+  assert.deepEqual(checks, ["check shared"]);
+  assert.deepEqual(plan.map((item) => item.name), ["shared"]);
+});
+
+test("exclusive verification execution errors never count as successful removal", async () => {
+  for (const failAt of ["target", "cleanup"]) {
+    for (const failure of ["throw", "null"]) {
+      const mutations = [], errors = [];
+      const code = await main(["sync", "--plugin", "a", "--yes"], {
+        catalog: exclusiveCatalog(),
+        runCheck: (command) => {
+          if ((failAt === "target" && command === "check a" && mutations.includes("setup a")) ||
+              (failAt === "cleanup" && command === "check b" && mutations.includes("remove b"))) {
+            if (failure === "throw") throw new Error("check process failed");
+            return { status: null, error: new Error("spawn failed") };
+          }
+          return { status: command === "check a" && !mutations.includes("install a") ? 1 : 0 };
+        },
+        runMutation: (command) => { mutations.push(command); return { status: 0 }; },
+        write: () => {}, writeError: (error) => errors.push(error),
+      });
+      assert.equal(code, 1);
+      assert.ok(!mutations.includes("remove c"));
+      if (failAt === "target") assert.ok(!mutations.includes("remove b"));
+      assert.match(errors.join("\n"), /Completed:.*setup a/s);
+      assert.match(errors.join("\n"), /Pending:/);
+    }
+  }
+});
+
+test("exclusive switches across groups verify all new plugins before any cleanup", async () => {
+  const input = exclusiveCatalog();
+  input.profiles.x = { exclusiveGroup: "other", defaultInExclusiveGroup: true };
+  input.profiles.y = { exclusiveGroup: "other" };
+  for (const name of ["x", "y"]) input.plugins.push({
+    ...input.plugins[0], name, profiles: [name], checkCommand: `check ${name}`,
+    installCommand: `install ${name}`, setupCommand: `setup ${name}`, uninstallCommands: [`remove ${name}`],
+  });
+  const installed = new Set(["b", "y"]), events = [];
+  assert.equal(await main(["sync", "--all", "--yes"], {
+    catalog: input,
+    runCheck: (command) => { events.push(command); return { status: installed.has(command.split(" ")[1]) ? 0 : 1 }; },
+    runMutation: (command) => {
+      events.push(command); const [action, name] = command.split(" ");
+      if (action === "install") installed.add(name);
+      if (action === "remove") installed.delete(name);
+      return { status: 0 };
+    }, write: () => {}, writeError: (error) => assert.fail(error),
+  }), 0);
+  assert.deepEqual(events.slice(5), ["install a", "setup a", "install x", "setup x", "check a", "check x", "remove b", "check b", "remove y", "check y"]);
+  assert.deepEqual([...installed], ["a", "x"]);
+});
+
+test("batch removal executes every conflicting plugin even without review", async () => {
+  const input = exclusiveCatalog();
+  input.plugins.forEach((p) => { p.reviewed = false; });
+  const mutations = [];
+  assert.equal(await main(["remove", "--all", "--yes"], {
+    catalog: input, runCheck: () => ({ status: 0 }),
+    runMutation: (command) => { mutations.push(command); return { status: 0 }; },
+    write: () => {}, writeError: (error) => assert.fail(error),
+  }), 0);
+  assert.deepEqual(mutations, ["remove a", "remove b", "remove c"]);
+});
 
 test("uses PowerShell on Windows and sh elsewhere", () => {
   assert.deepEqual(shellInvocation("echo ready", "win32"), {
@@ -498,6 +757,52 @@ test("shared detector preserves override, environment and runtime precedence", (
   assert.throws(() => detectActiveAgents(undefined, { CODEX_THREAD_ID: "1", CLAUDECODE: "1" }), /ambiguous/);
 });
 
+test("WorkBuddy and CodeBuddy markers resolve to the codebuddy agent", () => {
+  const workbuddy = {
+    WORKBUDDY_APP_NAME: "WorkBuddy",
+    WORKBUDDY_PRODUCT_NAME: "WorkBuddy",
+    WORKBUDDY_CONFIG_DIR: "C:\\Users\\someone\\.workbuddy",
+    WORKBUDDY_USER_DATA_DIR: "C:\\Users\\someone\\.workbuddy\\app",
+    WORKBUDDY_IS_PACKAGED: "1",
+    CODEBUDDY_CONFIG_DIR: "C:\\Users\\someone\\.workbuddy",
+    CODEBUDDY_HOST: "workbuddy-desktop",
+    CODEBUDDY_SESSION_ID: "session",
+    CLIENT_INFO_PLATFORM: "WorkBuddy",
+    CLIENT_INFO_IDE_TYPE: "WorkBuddy",
+    CLIENT_INFO_PRODUCT_NAME: "WorkBuddy",
+    CLAUDE_SESSION_ID: "shim-session",
+    CLAUDE_PROJECT_DIR: "/project",
+  };
+  // Every marker belongs to the one runtime, so overlapping evidence is not ambiguity.
+  assert.deepEqual(detectActiveAgents(undefined, workbuddy), ["codebuddy"]);
+  for (const key of ["WORKBUDDY_APP_NAME", "WORKBUDDY_PRODUCT_NAME", "WORKBUDDY_CONFIG_DIR", "WORKBUDDY_USER_DATA_DIR", "WORKBUDDY_IS_PACKAGED", "CODEBUDDY_CONFIG_DIR", "CODEBUDDY_SESSION_ID"]) {
+    assert.deepEqual(detectActiveAgents(undefined, { [key]: "1" }), ["codebuddy"], key);
+  }
+  assert.deepEqual(detectActiveAgents(undefined, { CODEBUDDY_HOST: "workbuddy-desktop" }), ["codebuddy"]);
+  for (const key of ["CLIENT_INFO_PLATFORM", "CLIENT_INFO_IDE_TYPE", "CLIENT_INFO_PRODUCT_NAME"]) {
+    assert.deepEqual(detectActiveAgents(undefined, { [key]: "WorkBuddy" }), ["codebuddy"], key);
+  }
+  // WorkBuddy injects Claude Code compatibility variables; they are not activity evidence.
+  const shim = { CLAUDE_SESSION_ID: "shim-session", CLAUDE_PROJECT_DIR: "/project" };
+  assert.throws(() => detectActiveAgents(undefined, shim), /Could not detect/);
+  // Overrides keep precedence and a genuinely different runtime is still ambiguous.
+  assert.deepEqual(detectActiveAgents(["codex"], workbuddy), ["codex"]);
+  assert.deepEqual(detectActiveAgents(undefined, { ...workbuddy, MY_SKILLS_AGENT: "codex" }), ["codex"]);
+  assert.throws(() => detectActiveAgents(undefined, { CODEX_THREAD_ID: "1", CODEBUDDY_SESSION_ID: "1" }), /ambiguous/);
+});
+
+test("codebuddy global skills mismatch is reported only when the directories differ", () => {
+  const home = join("fake-home", "someone");
+  const cliHome = join(home, ".codebuddy");
+  assert.equal(codebuddyGlobalSkillsMismatch({}, home), null);
+  assert.equal(codebuddyGlobalSkillsMismatch({ CODEBUDDY_CONFIG_DIR: cliHome }, home), null);
+  assert.equal(codebuddyGlobalSkillsMismatch({ CODEBUDDY_CONFIG_DIR: ` ${cliHome} ` }, home), null);
+  assert.deepEqual(
+    codebuddyGlobalSkillsMismatch({ CODEBUDDY_CONFIG_DIR: join(home, ".workbuddy") }, home),
+    { runtimeDir: join(home, ".workbuddy", "skills"), cliDir: join(cliHome, "skills") },
+  );
+});
+
 test("agent options merge and only resolve detected targets", async () => {
   const args = parsePluginArgs(["plan", "--all", "--agent", "codex,claude-code", "--agent", "codex"]);
   assert.deepEqual(args.agents, ["codex", "claude-code"]);
@@ -585,7 +890,8 @@ test("real plugin catalog resolves all Codex targets without leaving placeholder
     const plan = await buildInstallPlan(current, parsePluginArgs(["plan", "--all"]), {
       platform, env: { CODEX_THREAD_ID: "test" }, runCheck: () => ({ status: 1 }),
     });
-    assert.equal(plan.length, 4);
+    assert.equal(plan.length, 1);
+    assert.equal(plan[0].name, "codegraph");
     for (const item of plan) {
       assert.deepEqual(item.agents, ["codex"]);
       assert.ok(item.actions.some((action) => action.stage === "setup" && action.agent === "codex"));
@@ -634,7 +940,7 @@ test("installed selection is opt-in and never falls back or ignores missing mapp
 function plugin(overrides = {}) {
   return {
     name: "gitnexus",
-    profiles: ["coding1"],
+    profiles: ["mattpocock"],
     checkCommand: "gitnexus --version",
     installCommand: "npm install -g gitnexus@latest",
     setupCommand: "gitnexus setup -c codex",
@@ -648,7 +954,7 @@ function catalog(plugins = [plugin()]) {
   return {
     schemaVersion: 1,
     defaultProfiles: ["core"],
-    profiles: { core: {}, coding1: {} },
+    profiles: { core: {}, mattpocock: {} },
     skills: [],
     plugins,
   };
@@ -713,7 +1019,7 @@ test("parses and deduplicates comma-separated plugin selectors", () => {
 test("requires exactly one selector", () => {
   assert.throws(() => parsePluginArgs(["install"]), /requires --profile, --plugin, or --all/);
   assert.throws(
-    () => parsePluginArgs(["install", "--profile", "coding1", "--all"]),
+    () => parsePluginArgs(["install", "--profile", "mattpocock", "--all"]),
     /selectors are mutually exclusive/,
   );
 });
@@ -729,10 +1035,10 @@ test("selects plugin names case-insensitively in catalog order", () => {
 
 test("selects every plugin attached to any selected profile", () => {
   const input = catalog([
-    plugin({ name: "one", profiles: ["coding1"] }),
+    plugin({ name: "one", profiles: ["mattpocock"] }),
     plugin({ name: "two", profiles: ["core"] }),
   ]);
-  const args = parsePluginArgs(["plan", "--profile", "coding1"]);
+  const args = parsePluginArgs(["plan", "--profile", "mattpocock"]);
   assert.deepEqual(selectPlugins(input, args).map((entry) => entry.name), ["one"]);
 });
 
@@ -751,22 +1057,21 @@ test("current catalog defines the approved plugins without project index command
   const current = JSON.parse(await readFile(new URL("../pluginset.json", import.meta.url), "utf8"));
   validatePluginCatalog(current, { platform: "win32" });
   assert.deepEqual(current.plugins.map((entry) => entry.name), [
-    "graphify",
     "gitnexus",
     "codegraph",
     "codebase-memory-mcp",
   ]);
   assert.deepEqual(current.plugins.map((entry) => entry.profiles), [
-    ["coding2"],
-    ["coding1"],
-    ["coding2"],
-    ["coding2"],
+    ["gitnexus"],
+    ["codegraph"],
+    ["codebase-memory-mcp"],
   ]);
-  assert.equal(Object.hasOwn(current.profiles, "codegraph"), false);
+  assert.equal(current.profiles.codegraph.exclusiveGroup, "codegraph");
+  assert.equal(current.profiles.codegraph.defaultInExclusiveGroup, true);
   assert.equal(Object.hasOwn(current.profiles, "codebase-memory"), false);
   assert.deepEqual(
-    selectPlugins(current, parsePluginArgs(["plan", "--profile", "coding2"])).map((entry) => entry.name),
-    ["graphify", "codegraph", "codebase-memory-mcp"],
+    selectPlugins(current, parsePluginArgs(["plan", "--profile", "superpowers,codegraph"])).map((entry) => entry.name),
+    ["codegraph"],
   );
   const serialized = JSON.stringify(current.plugins);
   for (const forbidden of ["gitnexus analyze", "gitnexus clean", "codegraph init", "codegraph uninit"]) {

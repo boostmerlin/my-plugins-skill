@@ -72,6 +72,29 @@ function validatePluginCatalog(catalog, { platform = process.platform } = {}) {
     throw new Error("profiles must be an object");
   }
   if (!Array.isArray(catalog.plugins)) throw new Error("plugins must be an array");
+  const groups = new Map();
+  for (const [name, profile] of Object.entries(catalog.profiles)) {
+    if (!profile || typeof profile !== "object" || Array.isArray(profile)) throw new Error(`Invalid profile: ${name}`);
+    if (profile.exclusiveGroup !== undefined) {
+      assertNonEmptyString(profile.exclusiveGroup, `profiles.${name}.exclusiveGroup`);
+      profile.exclusiveGroup = profile.exclusiveGroup.trim();
+    }
+    if (profile.defaultInExclusiveGroup !== undefined) {
+      if (!profile.exclusiveGroup || typeof profile.defaultInExclusiveGroup !== "boolean") {
+        throw new Error(`profiles.${name}.defaultInExclusiveGroup requires exclusiveGroup and a boolean`);
+      }
+    }
+    if (profile.exclusiveGroup) {
+      if (!groups.has(profile.exclusiveGroup)) groups.set(profile.exclusiveGroup, []);
+      groups.get(profile.exclusiveGroup).push(profile);
+    }
+  }
+  for (const [group, members] of groups) {
+    if (members.length < 2) throw new Error(`Exclusive group ${group} must contain at least two profiles`);
+    if (members.filter((p) => p.defaultInExclusiveGroup === true).length !== 1) {
+      throw new Error(`Exclusive group ${group} must have exactly one defaultInExclusiveGroup profile`);
+    }
+  }
 
   const names = new Set();
   catalog.plugins.forEach((entry, index) => {
@@ -148,28 +171,57 @@ function parsePluginArgs(argv) {
   }
   if (result.command === "help") return result;
   if (result.detectInstalled && result.agents) throw new Error("--detect-installed and --agent are mutually exclusive");
-  if (!["plan", "install", "update", "remove"].includes(result.command)) throw new Error(`Unknown command: ${result.command}`);
+  if (!["plan", "sync", "install", "update", "remove"].includes(result.command)) throw new Error(`Unknown command: ${result.command}`);
   const selectorCount = Number(Boolean(result.profiles)) + Number(Boolean(result.plugins)) + Number(result.all);
   if (selectorCount === 0) throw new Error(`${result.command} requires --profile, --plugin, or --all`);
   if (selectorCount > 1) throw new Error("--profile, --plugin, and --all selectors are mutually exclusive");
   return result;
 }
 
-function selectPlugins(catalog, args) {
-  if (args.all) return [...catalog.plugins];
-  if (args.profiles) {
-    const selectedProfiles = new Set(args.profiles);
+function pluginSelection(catalog, args) {
+  const enforceExclusive = ["plan", "sync"].includes(args.command);
+  const profiles = args.all && enforceExclusive
+    ? Object.keys(catalog.profiles).filter((name) => !catalog.profiles[name].exclusiveGroup || catalog.profiles[name].defaultInExclusiveGroup === true)
+    : args.profiles;
+  const groups = new Map();
+  let selected;
+  if (profiles) {
+    const selectedProfiles = new Set(profiles);
     for (const profile of selectedProfiles) {
       if (!Object.hasOwn(catalog.profiles, profile)) throw new Error(`Unknown profile: ${profile}`);
+      const group = catalog.profiles[profile].exclusiveGroup;
+      if (enforceExclusive && group) {
+        if (groups.has(group)) throw new Error(`Selected profiles conflict in exclusive group ${group}`);
+        groups.set(group, new Set([profile]));
+      }
     }
-    return catalog.plugins.filter((entry) => entry.profiles.some((profile) => selectedProfiles.has(profile)));
+    selected = catalog.plugins.filter((entry) => entry.profiles.some((profile) => selectedProfiles.has(profile)));
+  } else if (args.all) {
+    selected = [...catalog.plugins];
+  } else {
+    const requested = new Set(args.plugins.map((name) => name.toLowerCase()));
+    const known = new Set(catalog.plugins.map((entry) => entry.name.toLowerCase()));
+    for (const name of args.plugins) {
+      if (!known.has(name.toLowerCase())) throw new Error(`Unknown plugin: ${name}`);
+    }
+    selected = catalog.plugins.filter((entry) => requested.has(entry.name.toLowerCase()));
   }
-  const requested = new Set(args.plugins.map((name) => name.toLowerCase()));
-  const known = new Set(catalog.plugins.map((entry) => entry.name.toLowerCase()));
-  for (const name of args.plugins) {
-    if (!known.has(name.toLowerCase())) throw new Error(`Unknown plugin: ${name}`);
+  if (enforceExclusive) {
+    // A shared plugin can belong to either member; it must not force both.
+    for (const entry of selected) {
+      const memberships = new Set(entry.profiles.map((p) => catalog.profiles[p].exclusiveGroup));
+      if (memberships.size !== 1 || memberships.has(undefined)) continue;
+      const [group] = memberships;
+      const compatible = new Set(entry.profiles.filter((p) => !groups.has(group) || groups.get(group).has(p)));
+      if (!compatible.size) throw new Error(`Selected plugins conflict in exclusive group ${group}: ${selected.map((p) => p.name).join(", ")}`);
+      groups.set(group, compatible);
+    }
   }
-  return catalog.plugins.filter((entry) => requested.has(entry.name.toLowerCase()));
+  return { selected, groups };
+}
+
+function selectPlugins(catalog, args) {
+  return pluginSelection(catalog, args).selected;
 }
 
 function assertAgentToken(value, label) {
@@ -247,33 +299,43 @@ function resolvePluginCommands(entry, platform) {
 }
 
 async function inspectSelectedPlugins(catalog, args, { platform = process.platform, runCheck, env = process.env, discovery }) {
-  const selected = selectPlugins(catalog, args).map((entry) => {
+  const selection = pluginSelection(catalog, args);
+  const cleanup = !["plan", "sync"].includes(args.command) ? [] : catalog.plugins.filter((entry) =>
+    !selection.selected.includes(entry) && new Set(entry.profiles).size === 1 && entry.profiles.every((name) => {
+      const group = catalog.profiles[name].exclusiveGroup;
+      return selection.groups.get(group)?.size === 1 && !selection.groups.get(group).has(name);
+    }));
+  const selected = [...selection.selected, ...cleanup].map((entry) => {
     validateAgentConfig(entry, entry.name);
     const targets = resolvePluginAgents(entry, args, env, discovery);
     const commands = resolvePluginCommands(entry, platform);
     for (const field of ["installCommands", "updateCommands", "setupCommands", "uninstallCommands"]) {
       commands[field] = expandCommands(commands[field], targets);
     }
-    return { entry, commands, agents: targets.map(({ name }) => name) };
+    return { entry, commands, agents: targets.map(({ name }) => name), cleanup: cleanup.includes(entry), verify: selection.groups.size > 0 };
   });
   const inspected = [];
-  for (const { entry, commands, agents } of selected) {
+  for (const item of selected) {
+    const { commands } = item;
     const check = await runCheck(commands.checkCommand);
-    inspected.push({ entry, commands, agents, check, installed: check.status === 0 });
+    if (check.error || check.status == null) throw new Error(`Cannot determine plugin availability: ${item.entry.name}`);
+    if (!item.cleanup || check.status === 0) inspected.push({ ...item, check, installed: check.status === 0 });
   }
   return inspected;
 }
 
 async function buildInstallPlan(catalog, args, options) {
   const inspected = await inspectSelectedPlugins(catalog, args, options);
-  return inspected.map(({ entry, commands, agents, check, installed }) => ({
+  return inspected.map(({ entry, commands, agents, check, installed, cleanup, verify }) => ({
     name: entry.name,
     agents,
     reviewed: entry.reviewed,
     installed,
+    cleanup,
+    verify,
     checkCommand: commands.checkCommand,
     checkStatus: check.status,
-    actions: [
+    actions: cleanup ? commands.uninstallCommands.map((action) => ({ stage: "uninstall", ...action })) : [
       ...(!installed ? commands.installCommands.map((action) => ({ stage: "install", ...action })) : []),
       ...commands.setupCommands.map((action) => ({ stage: "setup", ...action })),
     ],
@@ -286,13 +348,14 @@ async function buildUpdatePlan(catalog, args, options) {
     if (entry.updateCommand == null) throw new Error(`Plugin has no updateCommand: ${entry.name}`);
   }
   const inspected = await inspectSelectedPlugins(catalog, args, options);
-  return inspected.map(({ entry, commands, agents, installed, check }) => {
-    if (!installed) throw new Error(`Plugin is unavailable: ${entry.name}; run install first`);
+  return inspected.map(({ entry, commands, agents, installed, check, cleanup, verify }) => {
+    if (!installed && !cleanup) throw new Error(`Plugin is unavailable: ${entry.name}; run install first`);
     return {
       name: entry.name, reviewed: entry.reviewed, installed,
       agents,
+      cleanup, verify,
       checkCommand: commands.checkCommand, checkStatus: check.status,
-      actions: [
+      actions: cleanup ? commands.uninstallCommands.map((action) => ({ stage: "uninstall", ...action })) : [
         ...commands.updateCommands.map((action) => ({ stage: "update", ...action })),
         ...commands.setupCommands.map((action) => ({ stage: "setup", ...action })),
       ],
@@ -313,14 +376,16 @@ async function buildRemovalPlan(catalog, args, options) {
   }));
 }
 
-function formatInstallPlan(plan, { update = false } = {}) {
-  const lines = [update ? "Plugin update plan:" : "Plugin installation plan:"];
+function formatInstallPlan(plan, { update = false, sync = false } = {}) {
+  const lines = [update ? "Plugin update plan:" : sync ? "Plugin sync plan:" : "Plugin installation plan:"];
+  if (plan.some((item) => item.cleanup)) lines.push("Cleanup runs only after all selected plugins succeed and pass verification. Full uninstall: shared CLI removal may affect other agents.");
   for (const item of plan) {
-    lines.push(`${item.reviewed ? "[READY]" : "[BLOCKED]"} ${item.name}`);
+    lines.push(`${item.cleanup ? "[CLEANUP]" : item.reviewed ? "[REVIEWED]" : "[BLOCKED]"} ${item.name}`);
     if (item.agents?.length) lines.push(`  AGENTS: ${item.agents.join(", ")}`);
     lines.push(`  CHECK: ${item.checkCommand}`);
-    if (item.installed && !update) lines.push("  SKIP INSTALL: CLI is available");
+    if (item.installed && !update && !item.cleanup) lines.push("  SKIP INSTALL: CLI is available");
     for (const action of item.actions) lines.push(`  ${action.stage.toUpperCase()}: ${action.command}${action.agent ? ` [agent: ${action.agent}]` : ""}`);
+    if (item.verify) lines.push(`  VERIFY ${item.cleanup ? "ABSENT after cleanup" : "AVAILABLE before cleanup"}: ${item.checkCommand}`);
   }
   return lines.join("\n");
 }
@@ -367,10 +432,36 @@ async function runActions(plan, runMutation) {
   }
 }
 
-async function applyInstallPlan(plan, { runMutation }) {
-  const blocked = plan.find((item) => item.reviewed !== true);
+async function applyInstallPlan(plan, { runMutation, runCheck }) {
+  const blocked = plan.find((item) => !item.cleanup && item.reviewed !== true);
   if (blocked) throw new Error(`Plugin is not reviewed: ${blocked.name}`);
-  await runActions(plan, runMutation);
+  const targets = plan.filter((item) => !item.cleanup);
+  const steps = targets.flatMap((item) => item.actions.map((action) => ({ item, action })));
+  const verification = (item) => ({ item, action: { stage: "verify", command: item.checkCommand } });
+  steps.push(...targets.filter((item) => item.verify).map(verification));
+  for (const item of plan.filter((item) => item.cleanup)) {
+    steps.push(...item.actions.map((action) => ({ item, action })), verification(item));
+  }
+  if (steps.some(({ action }) => action.stage === "verify") && !runCheck) throw new Error("runCheck is required for exclusive plugin verification");
+  const completed = [];
+  const label = ({ item, action }) => `${item.name} ${action.stage}: ${action.command}`;
+  for (let index = 0; index < steps.length; index++) {
+    const { item, action } = steps[index];
+    try {
+      if (action.stage === "verify") {
+        const check = await runCheck(action.command);
+        if (check.error || check.status == null || (item.cleanup ? check.status === 0 : check.status !== 0)) {
+          throw new Error(`${item.name} verification failed: expected ${item.cleanup ? "absent" : "available"}`);
+        }
+      } else {
+        await runActions([{ ...item, actions: [action] }], runMutation);
+      }
+      completed.push(label(steps[index]));
+    } catch (error) {
+      error.message += `\nCompleted: ${completed.join("; ") || "none"}\nPending: ${steps.slice(index).map(label).join("; ")}`;
+      throw error;
+    }
+  }
 }
 
 async function applyRemovalPlan(plan, { runMutation }) {
@@ -426,6 +517,7 @@ function usage() {
 
 Commands:
   plan     (--profile <a,b> | --plugin <a,b> | --all)
+  sync     (--profile <a,b> | --plugin <a,b> | --all) [--yes]
   install  (--profile <a,b> | --plugin <a,b> | --all) [--yes]
   update   (--profile <a,b> | --plugin <a,b> | --all) [--yes]
   remove   (--profile <a,b> | --plugin <a,b> | --all) [--yes]
@@ -433,11 +525,15 @@ Commands:
 Options:
   --profile <a,b>  Select plugins assigned to profiles
   --plugin <a,b>   Select plugins by name
-  --all            Select every plugin
+  --all            plan/sync: ordinary/default profiles; install/update/remove: every plugin
   --agent <a,b>    Resolve detected agents (repeatable; does not override explicit catalog agents)
   --detect-installed  Resolve detected from installed global agent configs, not the active session
-  --yes            Execute a displayed install, update, or removal plan
-  --help            Show this help`;
+  --yes            Execute a displayed sync, install, update, or removal plan
+  --help            Show this help
+
+plan previews sync. Only sync enforces exclusivity and cleans up displaced plugins.
+install/update/remove allow same-group plugins together and do not clean up peers.
+Without --yes, modification commands only preview their actions.`;
 }
 
 async function main(argv = process.argv.slice(2), dependencies = {}) {
@@ -455,13 +551,13 @@ async function main(argv = process.argv.slice(2), dependencies = {}) {
     const runCheck = dependencies.runCheck ?? ((command) => runCheckCommand(command, { platform }));
     const runMutation = dependencies.runMutation ?? ((command) => runMutationCommand(command, { platform }));
 
-    if (["plan", "install", "update"].includes(args.command)) {
+    if (["plan", "sync", "install", "update"].includes(args.command)) {
       const update = args.command === "update";
       const plan = await (update ? buildUpdatePlan : buildInstallPlan)(catalog, args, { platform, runCheck, env: dependencies.env, discovery: dependencies.discovery });
-      write(formatInstallPlan(plan, { update }));
+      write(formatInstallPlan(plan, { update, sync: ["plan", "sync"].includes(args.command) }));
       if (args.command !== "plan") {
         if (!args.yes) write("Repeat with --yes to execute this plan.");
-        else await applyInstallPlan(plan, { runMutation });
+        else await applyInstallPlan(plan, { runMutation, runCheck });
       }
       return 0;
     }

@@ -6,8 +6,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createInterface } from "node:readline/promises";
-import { detectActiveAgents } from "./agent-detection.mjs";
+import { detectActiveAgents, codebuddyGlobalSkillsMismatch } from "./agent-detection.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const catalogPath = join(root, "pluginset.json");
@@ -30,17 +29,22 @@ Commands:
   doctor                         Check prerequisites and catalog validity
   plan [--profile <a,b> | --all]         Show sync changes needed for profiles
   sync [--profile <a,b> | --all] [--yes] Install selected and remove conflicting skills
+  install [--profile <a,b> | --all] [--yes] Install selected skills without exclusive cleanup
+  remove (--profile <a,b> | --all) [--yes] Remove selected skills without exclusive restrictions
   audit [--profile <a,b> | --all]        Report catalog and installation drift
   sources [skill ...] [options]  Confirm installed skill sources without changing them
 
 Options:
   --profile <a,b>  Select comma-separated profiles
-  --all            Select all compatible profiles (audit --all checks every profile)
+  --all            plan/sync: compatible defaults; install/remove/audit: every profile
   --agent <a,b>    Resolve catalog agent "detected" (otherwise infer the active agent)
   --json           Emit stable machine-readable source results
   --verify-remote  Allow source verification against a remote repository
-  --yes            Confirm a previously reviewed sync plan
-  --help            Show this help`);
+  --yes            Execute the displayed install, remove, or sync plan
+  --help            Show this help
+
+Without --yes, install/remove/sync only preview, including cleanup-only sync.
+install/remove allow same-group profiles together. plan previews sync.`);
 }
 
 function parseArgs(argv) {
@@ -86,6 +90,9 @@ function parseArgs(argv) {
   }
   if (result.allProfiles && result.profiles) {
     throw new Error("--all cannot be combined with --profile");
+  }
+  if (result.command === "remove" && !result.profiles && !result.allProfiles) {
+    throw new Error("remove requires --profile or --all");
   }
   return result;
 }
@@ -727,7 +734,15 @@ async function doctor(args) {
     console.log(`[OK] Catalog: schema v${catalog.schemaVersion}, ${catalog.skills.length} source entries`);
     if (catalog.skills.some((entry) => entry.agents[0] === "detected")) {
       try {
-        console.log(`[OK] Active agent: ${detectActiveAgents(args.agents).join(", ")}`);
+        const agents = detectActiveAgents(args.agents);
+        console.log(`[OK] Active agent: ${agents.join(", ")}`);
+        if (agents.includes("codebuddy")) {
+          const mismatch = codebuddyGlobalSkillsMismatch();
+          if (mismatch) {
+            console.log(`[WARN] CodeBuddy global scope: Skills CLI writes ${mismatch.cliDir},`
+              + ` this runtime scans ${mismatch.runtimeDir}`);
+          }
+        }
       } catch (error) {
         console.log(`[WARN] Active agent: ${error.message}`);
       }
@@ -739,32 +754,38 @@ async function doctor(args) {
   if (failed) process.exitCode = 1;
 }
 
-async function planCommand(args) {
-  const catalog = await loadCatalog();
-  const profiles = selectProfiles(catalog, args.profiles, args.allProfiles);
+async function planCommand(args, dependencies = {}) {
+  const catalog = dependencies.catalog ? validateCatalog(dependencies.catalog) : await loadCatalog();
+  const syncing = ["plan", "sync"].includes(args.command);
+  const profiles = selectProfiles(catalog, args.profiles, args.allProfiles, { allowConflicts: !syncing });
   const selected = expandCatalog(catalog, profiles);
-  const selectsExclusiveProfile = profiles.some((profile) => catalog.profiles[profile].exclusiveGroup);
+  const selectsExclusiveProfile = syncing && profiles.some((profile) => catalog.profiles[profile].exclusiveGroup);
   const needsDetection = selectsExclusiveProfile || selected.some(
     (skill) => !isLocalSource(skill.package) && skill.agents[0] === "detected",
   );
-  const detectedAgents = needsDetection ? detectActiveAgents(args.agents) : [];
+  const detectedAgents = needsDetection ? (dependencies.detectActiveAgents || detectActiveAgents)(args.agents) : [];
   if (needsDetection) console.log(`Active agent: ${detectedAgents.join(", ")}`);
-  const installed = listInstalled();
+  const installed = (dependencies.listInstalled || listInstalled)();
   const cleanupAgents = selectsExclusiveProfile ? detectedAgents : [];
-  const plan = buildPlan(catalog, profiles, installed, detectedAgents);
-  const cleanupPlan = buildCleanupPlan(catalog, profiles, installed, cleanupAgents);
+  const plan = args.command === "remove"
+    ? buildExplicitRemovalPlan(selected, installed, detectedAgents)
+    : buildPlan(catalog, profiles, installed, detectedAgents);
+  const cleanupPlan = syncing ? buildCleanupPlan(catalog, profiles, installed, cleanupAgents) : [];
+  console.log(`Skill ${args.command === "plan" ? "sync" : args.command} plan:`);
   printPlan(profiles, plan, cleanupPlan, cleanupAgents);
   return { catalog, profiles, plan, cleanupPlan, detectedAgents, cleanupAgents };
 }
 
-async function confirmSync() {
-  if (!process.stdin.isTTY) {
-    throw new Error("Cannot prompt in a non-interactive session; review the plan and rerun with --yes");
-  }
-  const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await prompt.question("Apply the planned skill changes? [y/N] ");
-  prompt.close();
-  return /^(y|yes)$/i.test(answer.trim());
+function buildExplicitRemovalPlan(selected, installed, detectedAgents) {
+  return selected.map((skill) => {
+    const membership = `profiles: ${skill.profiles.join(", ")}`;
+    if (isLocalSource(skill.package)) return { skill, action: "skip", reason: `local source removal is disabled; ${membership}` };
+    const agents = resolveAgents(skill, detectedAgents).filter((agent) => installedForAgents(installed, skill, [agent]));
+    return {
+      skill, agents, action: agents.length ? "remove" : "skip",
+      reason: `${agents.length ? `explicit removal from ${agents.join(", ")}` : "not installed for selected agents"}; ${membership}`,
+    };
+  });
 }
 
 function buildInstallBatches(actions, detectedAgents) {
@@ -798,8 +819,11 @@ function buildRemovalBatches(removals, agents) {
   const batches = new Map();
   for (const item of removals) {
     const scope = item.skill.scope;
-    if (!batches.has(scope)) batches.set(scope, { names: [], scope, agents });
-    batches.get(scope).names.push(item.skill.name);
+    const targets = item.agents ?? agents;
+    const key = `${scope}:${targets.map(normalizeAgent).sort().join(",")}`;
+    if (!batches.has(key)) batches.set(key, { names: [], scope, agents: targets });
+    const batch = batches.get(key);
+    if (!batch.names.some((name) => name.toLowerCase() === item.skill.name.toLowerCase())) batch.names.push(item.skill.name);
   }
   return [...batches.values()];
 }
@@ -813,7 +837,6 @@ function removeArgs(batch) {
 async function applySyncPlan(syncPlan, args, dependencies = {}) {
   const executeSkills = dependencies.runSkills || runSkills;
   const readInstalled = dependencies.listInstalled || listInstalled;
-  const confirmChanges = dependencies.confirmSync || confirmSync;
   const { profiles, plan, cleanupPlan, detectedAgents, cleanupAgents } = syncPlan;
   const actions = plan.filter((item) => item.action === "install");
   const blocked = plan.filter((item) => item.action === "blocked");
@@ -826,9 +849,9 @@ async function applySyncPlan(syncPlan, args, dependencies = {}) {
     return { failed: false, cancelled: false, residual: [] };
   }
 
-  if (actions.length > 0 && !args.yes && !(await confirmChanges())) {
-    console.log("Sync cancelled.");
-    return { failed: false, cancelled: true, residual: [] };
+  if (!args.yes) {
+    console.log("Repeat with --yes to execute this plan.");
+    return { failed: false, cancelled: false, preview: true, residual: [] };
   }
 
   const batches = buildInstallBatches(actions, detectedAgents);
@@ -868,7 +891,7 @@ async function applySyncPlan(syncPlan, args, dependencies = {}) {
   const residual = removals.filter((item) => installedForAgents(installedAfterCleanup, item.skill, cleanupAgents));
   const removedCount = removals.length - residual.length;
   if (removals.length > 0) console.log(`Removed conflicting skills: ${removedCount}/${removals.length}`);
-  console.log(`Sync complete for profiles: ${profiles.join(", ")}`);
+  console.log(`${args.command === "install" ? "Install" : "Sync"} ${commandFailures.length || residual.length ? "failed" : "complete"} for profiles: ${profiles.join(", ")}`);
   if (commandFailures.length > 0 || residual.length > 0) {
     if (commandFailures.length > 0) console.log(`Removal command failures: ${[...new Set(commandFailures)].join(", ")}`);
     if (residual.length > 0) console.log(`Removal verification failed: ${residual.map((item) => item.skill.name).join(", ")}`);
@@ -881,9 +904,45 @@ async function applySyncPlan(syncPlan, args, dependencies = {}) {
   };
 }
 
-async function syncCommand(args) {
-  const result = await applySyncPlan(await planCommand(args), args);
-  if (result.failed) process.exitCode = 1;
+async function applyExplicitRemovalPlan(operationPlan, args, dependencies = {}) {
+  const removals = operationPlan.plan.filter((item) => item.action === "remove");
+  if (!args.yes) {
+    console.log("Repeat with --yes to execute this plan.");
+    return { failed: false, preview: true };
+  }
+  const executeSkills = dependencies.runSkills || runSkills;
+  const readInstalled = dependencies.listInstalled || listInstalled;
+  const batches = buildRemovalBatches(removals, operationPlan.detectedAgents);
+  const completed = [];
+  for (let index = 0; index < batches.length; index++) {
+    const batch = batches[index];
+    try {
+      const result = executeSkills(removeArgs(batch));
+      if (result.stdout) process.stdout.write(result.stdout);
+      if (result.stderr) process.stderr.write(result.stderr);
+      if (result.error || result.status !== 0) throw new Error(`Removal command failed: ${batch.names.join(", ")}`);
+      const installed = readInstalled();
+      const residual = batch.names.filter((name) => installedForAgents(installed, { name, scope: batch.scope }, batch.agents));
+      if (residual.length) throw new Error(`Removal verification failed: ${residual.join(", ")}`);
+      completed.push(`${batch.scope}:${batch.names.join(", ")} [${batch.agents.join(", ")}]`);
+    } catch (error) {
+      console.error(error.message);
+      console.error(`Completed: ${completed.join("; ") || "none"}`);
+      console.error(`Pending: ${batches.slice(index).map((b) => `${b.scope}:${b.names.join(", ")} [${b.agents.join(", ")}]`).join("; ")}`);
+      return { failed: true, completed };
+    }
+  }
+  console.log(`Removal complete for profiles: ${operationPlan.profiles.join(", ")}`);
+  return { failed: false, completed };
+}
+
+async function executeSkillOperation(args, dependencies = {}) {
+  if (args.command === "remove" && !args.profiles && !args.allProfiles) throw new Error("remove requires --profile or --all");
+  const operationPlan = await planCommand(args, dependencies);
+  if (args.command === "plan") return { failed: false, preview: true };
+  return args.command === "remove"
+    ? applyExplicitRemovalPlan(operationPlan, args, dependencies)
+    : applySyncPlan(operationPlan, args, dependencies);
 }
 
 function buildAuditFindings(catalog, profiles, installed, detectedAgents, { profileAudit = false } = {}) {
@@ -952,8 +1011,10 @@ async function main() {
       return;
     }
     if (args.command === "doctor") await doctor(args);
-    else if (args.command === "plan") await planCommand(args);
-    else if (args.command === "sync") await syncCommand(args);
+    else if (["plan", "sync", "install", "remove"].includes(args.command)) {
+      const result = await executeSkillOperation(args);
+      if (result.failed) process.exitCode = 1;
+    }
     else if (args.command === "audit") await auditCommand(args);
     else if (args.command === "sources") await sourcesCommand(args);
     else throw new Error(`Unknown command: ${args.command}`);
@@ -968,6 +1029,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 }
 
 export {
+  executeSkillOperation,
   assessProvenance,
   applySyncPlan,
   buildAuditFindings,

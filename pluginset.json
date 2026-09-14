@@ -5,14 +5,27 @@
     "core": {
       "description": "Skills installed in every environment"
     },
-    "coding1": {
+    "mattpocock": {
       "description": "Lightweight software development workflow",
       "exclusiveGroup": "coding",
       "defaultInExclusiveGroup": true
     },
-    "coding2": {
+    "superpowers": {
       "description": "Superpowers-driven software development workflow",
       "exclusiveGroup": "coding"
+    },
+    "gitnexus": {
+      "description": "GitNexus code intelligence plugin",
+      "exclusiveGroup": "codegraph"
+    },
+    "codegraph": {
+      "description": "CodeGraph code intelligence plugin",
+      "exclusiveGroup": "codegraph",
+      "defaultInExclusiveGroup": true
+    },
+    "codebase-memory-mcp": {
+      "description": "Codebase Memory MCP plugin",
+      "exclusiveGroup": "codegraph"
     },
     "docs": {
       "description": "Document, spreadsheet, and presentation skills"
@@ -49,7 +62,7 @@
         "codebase-design",
         "domain-modeling"
       ],
-      "profiles": ["coding1"],
+      "profiles": ["mattpocock"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -58,7 +71,7 @@
     {
       "package": "forrestchang/andrej-karpathy-skills",
       "names": ["karpathy-guidelines"],
-      "profiles": ["coding1"],
+      "profiles": ["mattpocock"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -82,7 +95,7 @@
         "writing-plans",
         "writing-skills"
       ],
-      "profiles": ["coding2"],
+      "profiles": ["superpowers"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -100,7 +113,7 @@
     {
       "package": "anthropics/skills",
       "names": ["frontend-design"],
-      "profiles": ["coding1", "coding2"],
+      "profiles": ["mattpocock", "superpowers"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -109,7 +122,7 @@
     {
       "package": "openai/skills",
       "names": ["playwright"],
-      "profiles": ["coding1", "coding2"],
+      "profiles": ["mattpocock", "superpowers"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -178,25 +191,10 @@
   ],
   "plugins": [
     {
-      "name": "graphify",
-      "agents": ["detected"],
-      "agentMap": { "codex": "codex" },
-      "profiles": ["coding2"],
-      "checkCommand": "graphify --version",
-      "installCommand": "uv tool install \"graphifyy[mcp]\"",
-      "setupCommand": "graphify install --platform {agent}",
-      "updateCommand": "uv tool upgrade graphifyy",
-      "uninstallCommands": [
-        "graphify uninstall --platform {agent}",
-        "uv tool uninstall graphifyy"
-      ],
-      "reviewed": true
-    },
-    {
       "name": "gitnexus",
       "agents": ["detected"],
       "agentMap": { "codex": "codex" },
-      "profiles": ["coding1"],
+      "profiles": ["gitnexus"],
       "checkCommand": {
         "default": "gitnexus --version",
         "win32": "gitnexus.cmd --version"
@@ -223,7 +221,7 @@
       "name": "codegraph",
       "agents": ["detected"],
       "agentMap": { "codex": "codex" },
-      "profiles": ["coding2"],
+      "profiles": ["codegraph"],
       "checkCommand": "codegraph --version",
       "installCommand": {
         "default": "npm install -g @colbymchenry/codegraph",
@@ -240,7 +238,7 @@
       "name": "codebase-memory-mcp",
       "agents": ["detected"],
       "agentMap": { "codex": "codex" },
-      "profiles": ["coding2"],
+      "profiles": ["codebase-memory-mcp"],
       "checkCommand": "codebase-memory-mcp --version",
       "installCommand": {
         "default": "npm install -g codebase-memory-mcp@latest",
