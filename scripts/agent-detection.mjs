@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, isAbsolute, resolve } from "node:path";
 
@@ -91,5 +91,8 @@ export function codebuddyGlobalSkillsMismatch(env = process.env, home = homedir(
   if (!configDir) return null;
   const runtimeDir = join(configDir, "skills");
   const cliDir = join(home, ".codebuddy", "skills");
-  return resolve(runtimeDir) === resolve(cliDir) ? null : { runtimeDir, cliDir };
+  // Follow junctions/symlinks so a directory link between the two is treated as the
+  // same physical location; fall back to the literal path when it does not yet exist.
+  const real = (path) => { try { return realpathSync(path); } catch { return resolve(path); } };
+  return real(runtimeDir) === real(cliDir) ? null : { runtimeDir, cliDir };
 }

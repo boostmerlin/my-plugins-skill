@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import test from "node:test";
 import { codebuddyGlobalSkillsMismatch, detectActiveAgents, detectInstalledAgents } from "./agent-detection.mjs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -801,6 +803,30 @@ test("codebuddy global skills mismatch is reported only when the directories dif
     codebuddyGlobalSkillsMismatch({ CODEBUDDY_CONFIG_DIR: join(home, ".workbuddy") }, home),
     { runtimeDir: join(home, ".workbuddy", "skills"), cliDir: join(cliHome, "skills") },
   );
+});
+
+test("codebuddy global skills mismatch is cleared when the cli dir is a junction to the runtime dir", () => {
+  const base = mkdtempSync(join(tmpdir(), "cb-skills-"));
+  const home = join(base, "home");
+  const runtimeSkills = join(home, ".workbuddy", "skills");
+  const cliSkills = join(home, ".codebuddy", "skills");
+  mkdirSync(runtimeSkills, { recursive: true });
+  try {
+    symlinkSync(runtimeSkills, cliSkills, "junction");
+  } catch {
+    // Junction creation may be unsupported in some environments; skip the assertion there.
+    rmSync(base, { recursive: true, force: true });
+    return;
+  }
+  try {
+    assert.equal(
+      codebuddyGlobalSkillsMismatch({ CODEBUDDY_CONFIG_DIR: join(home, ".workbuddy") }, home),
+      null,
+      "a junction makes the two directories the same physical location",
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test("agent options merge and only resolve detected targets", async () => {
