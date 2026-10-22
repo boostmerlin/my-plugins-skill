@@ -149,6 +149,7 @@ test("explicit removal batches separate agent sets and deduplicate shared names"
 
 test("skill sync converges only selected groups and preserves unrelated or deleted entries", async () => {
   const input = lifecycleCatalog();
+  input.skills.find(entry => entry.names.includes("local")).required = false;
   input.profiles.docs = {};
   input.skills.push({ ...input.skills[0], names: ["document"], profiles: ["docs"] });
   let installed = ["a-only", "b-only", "shared", "document", "deleted-from-catalog"].map((name) => ({ name, scope: "global", agents: ["codex"] }));
@@ -195,17 +196,19 @@ test("groups compatible missing skills into one CLI call", () => {
   ]);
 });
 
-test("keeps different scope and required policies in separate batches", () => {
+test("keeps different scope, agent and required policies in separate batches", () => {
   const batches = buildInstallBatches(
     [
       action("optional"),
       action("required", { required: true }),
       action("project", { scope: "project" }),
+      action("other-agent", { agents: ["claude-code"] }),
     ],
     ["codex"],
   );
 
-  assert.equal(batches.length, 3);
+  assert.equal(batches.length, 4);
+  assert.deepEqual(batches.map((batch) => batch.names), [["optional"], ["required"], ["project"], ["other-agent"]]);
 });
 
 test("uses the same local-path recognition rules as Skills CLI", () => {
@@ -250,9 +253,14 @@ test("current catalog groups each multi-skill source into one installation batch
   const batches = buildInstallBatches(actions, ["codex"]);
 
   assert.ok(batches.length < actions.length);
-  assert.equal(batches.find((batch) => batch.package === "mattpocock/skills").names.length, 5);
-  assert.equal(batches.find((batch) => batch.package === "obra/superpowers").names.length, 14);
-  assert.equal(batches.find((batch) => batch.package === "coreyhaines31/marketingskills").names.length, 50);
+  assert.deepEqual(batches.flatMap((batch) => batch.names).sort(), actions.map(({ skill }) => skill.name).sort());
+  for (const batch of batches) {
+    const expected = actions.filter(({ skill }) => skill.package === batch.package
+      && skill.scope === batch.scope && skill.required === batch.required
+      && JSON.stringify(skill.agents[0] === "detected" ? ["codex"] : skill.agents) === JSON.stringify(batch.agents));
+    assert.deepEqual(batch.names, expected.map(({ skill }) => skill.name));
+    assert.equal(new Set(batch.names).size, batch.names.length);
+  }
 });
 
 test("normalizes common GitHub source forms to one identity", () => {
@@ -375,7 +383,7 @@ test("treats a missing lock as optional and a corrupt lock as a diagnostic", asy
 });
 
 test("resolves a linked skill to its Git origin", async (context) => {
-  if (!spawnSync("git", ["--version"], { encoding: "utf8" }).stdout) context.skip("git unavailable");
+  if (!spawnSync("git", ["--version"], { encoding: "utf8" }).stdout) return context.skip("git unavailable");
   const temporary = await mkdtemp(join(tmpdir(), "my-skills-git-"));
   try {
     const repository = join(temporary, "repository");
@@ -384,6 +392,7 @@ test("resolves a linked skill to its Git origin", async (context) => {
     await mkdir(skill, { recursive: true });
     await writeFile(join(skill, "SKILL.md"), "---\nname: example\ndescription: Test\n---\n");
     assert.equal(spawnSync("git", ["init", repository], { encoding: "utf8" }).status, 0);
+    assert.equal(spawnSync("git", ["-C", repository, "add", "--", "skills/example/SKILL.md"], { encoding: "utf8" }).status, 0);
     assert.equal(
       spawnSync("git", ["-C", repository, "remote", "add", "origin", "git@github.com:owner/repository.git"], { encoding: "utf8" }).status,
       0,
@@ -699,7 +708,7 @@ test("validates exclusive groups and their single defaults", () => {
 
   assert.throws(
     () => validateCatalog(catalogWithProfiles({ only: { exclusiveGroup: "coding", defaultInExclusiveGroup: true } })),
-    /at least two profiles/,
+    /at least two/,
   );
   assert.throws(
     () => validateCatalog(catalogWithProfiles({

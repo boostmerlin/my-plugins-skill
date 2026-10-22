@@ -42,6 +42,163 @@ function exclusiveCatalog() {
   };
 }
 
+function itemExclusiveCatalog() {
+  const input = exclusiveCatalog();
+  input.profiles.docs = {};
+  input.plugins.forEach((entry, index) => {
+    entry.profiles = ["docs"];
+    entry.exclusiveGroup = "graphs";
+    entry.defaultInExclusiveGroup = index === 0;
+  });
+  return input;
+}
+
+test("plugin item groups validate independently and require one default with multiple members", () => {
+  assert.equal(validatePluginCatalog(itemExclusiveCatalog()).plugins.length, 3);
+  for (const mutate of [
+    (c) => { c.plugins[0].exclusiveGroup = " "; },
+    (c) => { c.plugins[0].exclusiveGroup = 42; },
+    (c) => { c.plugins[0].defaultInExclusiveGroup = "yes"; },
+    (c) => { delete c.plugins[0].exclusiveGroup; },
+    (c) => { c.plugins[0].defaultInExclusiveGroup = false; },
+    (c) => { c.plugins[1].defaultInExclusiveGroup = true; },
+    (c) => { c.plugins = c.plugins.slice(0, 1); },
+  ]) {
+    const input = itemExclusiveCatalog(); mutate(input);
+    assert.throws(() => validatePluginCatalog(input), /exclusive/i);
+  }
+});
+
+test("plugin item selection supports defaults, repeated choices, explicit names and candidate boundaries", () => {
+  const input = itemExclusiveCatalog();
+  const names = (argv) => selectPlugins(input, parsePluginArgs(argv)).map((entry) => entry.name);
+  assert.deepEqual(names(["plan", "--profile", "docs"]), ["a"]);
+  assert.deepEqual(names(["plan", "--all", "--choose", "graphs=b", "--choose", "graphs=b"]), ["b"]);
+  assert.deepEqual(names(["sync", "--plugin", "C"]), ["c"]);
+  assert.throws(() => names(["plan", "--plugin", "a,b"]), /exclusive/i);
+  assert.throws(() => names(["plan", "--plugin", "a", "--choose", "graphs=b"]), /choose|selection/i);
+  input.plugins[0].profiles = ["core"];
+  assert.throws(() => names(["plan", "--profile", "docs"]), /default|choose/i);
+  assert.deepEqual(names(["plan", "--profile", "docs", "--choose", "graphs=c"]), ["c"]);
+  input.plugins[1].profiles = ["core"];
+  assert.deepEqual(names(["plan", "--profile", "docs"]), ["c"]);
+});
+
+test("invalid plugin choices fail before external checks", async () => {
+  for (const argv of [
+    ["plan", "--all", "--choose", "missing=a"],
+    ["plan", "--all", "--choose", "graphs=missing"],
+    ["plan", "--all", "--choose", "graphs=a", "--choose", "graphs=b"],
+    ["plan", "--all", "--choose", "broken"],
+    ["plan", "--all", "--choose", "=a"],
+    ["plan", "--all", "--choose", "graphs="],
+    ...["install", "remove", "update"].map((command) => [command, "--all", "--choose", "graphs=a"]),
+  ]) {
+    const errors = [];
+    assert.equal(await main(argv, {
+      catalog: itemExclusiveCatalog(), runCheck: () => assert.fail("must not check"),
+      runMutation: () => assert.fail("must not mutate"), write: () => {}, writeError: (error) => errors.push(error),
+    }), 1);
+    assert.match(errors.join("\n"), /choose/i);
+  }
+});
+
+test("plugin choices are parsed once and preserve repeated selections for catalog resolution", () => {
+  const args = parsePluginArgs(["plan", "--all", "--choose", " graphs = B ", "--choose", "graphs=b"]);
+  assert.deepEqual(args.choices, [{ group: "graphs", name: "B" }, { group: "graphs", name: "b" }]);
+  assert.deepEqual(selectPlugins(itemExclusiveCatalog(), args).map((entry) => entry.name), ["b"]);
+  assert.throws(() => parsePluginArgs(["plan", "--all", "--choose", " --graphs=a "]), /choose/);
+});
+
+test("plugin choice resolution safely handles prototype-like group names and rejects conflicts", async () => {
+  for (const group of ["__proto__", "constructor"]) {
+    const input = itemExclusiveCatalog();
+    input.plugins.forEach((entry) => { entry.exclusiveGroup = group; });
+    const args = parsePluginArgs(["plan", "--all", "--choose", `${group}=B`, "--choose", `${group}=b`]);
+    assert.deepEqual(selectPlugins(input, args).map((entry) => entry.name), ["b"]);
+    const errors = [];
+    assert.equal(await main(["plan", "--all", "--choose", `${group}=a`, "--choose", `${group}=b`], {
+      catalog: input, runCheck: () => assert.fail("conflicts must fail before checks"),
+      write: () => {}, writeError: (error) => errors.push(error),
+    }), 1);
+    assert.match(errors.join("\n"), /conflict/i);
+  }
+});
+
+test("plugin entry sync cleans shared-profile alternatives only after all selected items verify", async () => {
+  for (const failure of [null, "install a", "verify a", "remove b", "verify b"]) {
+    const input = itemExclusiveCatalog();
+    input.plugins[1].profiles.push("core");
+    input.plugins.push({ ...input.plugins[0], name: "unrelated", profiles: ["core"], exclusiveGroup: undefined, defaultInExclusiveGroup: undefined });
+    const installed = new Set(["b"]), mutations = [], errors = [], output = [];
+    const result = await main(["sync", "--profile", "docs", "--yes"], {
+      catalog: input,
+      runCheck: (command) => ({ status: installed.has(command.split(" ")[1]) ? 0 : 1 }),
+      runMutation: (command) => {
+        mutations.push(command);
+        if (command === failure) return { status: 1 };
+        if (command === "install a" && failure !== "verify a") installed.add("a");
+        if (command === "remove b" && failure !== "verify b") installed.delete("b");
+        return { status: 0 };
+      }, write: (line) => output.push(line), writeError: (error) => errors.push(error),
+    });
+    assert.equal(result, failure ? 1 : 0, errors.join("\n"));
+    if (["install a", "verify a"].includes(failure)) assert.ok(!mutations.includes("remove b"));
+    if (!failure) assert.deepEqual(mutations, ["install a", "setup a", "remove b"]);
+    assert.match(output.join("\n"), /graphs.*default.*a/i);
+    assert.match(output.join("\n"), /reason.*entry.*graphs/i);
+    if (failure) assert.match(errors.join("\n"), /Pending/);
+  }
+});
+
+test("plugin item groups leave coexistence commands unchanged", () => {
+  for (const command of ["install", "remove", "update"]) {
+    assert.deepEqual(selectPlugins(itemExclusiveCatalog(), parsePluginArgs([command, "--all"])).map((p) => p.name), ["a", "b", "c"]);
+  }
+});
+
+test("plugin coexistence previews do not claim an entry choice", async () => {
+  const plan = await buildInstallPlan(itemExclusiveCatalog(), parsePluginArgs(["install", "--all"]), { runCheck: () => ({ status: 0 }) });
+  assert.doesNotMatch(formatInstallPlan(plan), /ENTRY GROUP|undefined/);
+});
+
+test("plugin multiple item choices remain independent from profile groups and deduplicate cleanup", async () => {
+  const input = itemExclusiveCatalog();
+  input.plugins[0].profiles = ["a"];
+  input.plugins[1].profiles = ["b"];
+  input.plugins[2].profiles = ["core"];
+  input.plugins.push(...["x", "y"].map((name) => ({
+    ...input.plugins[0], name, profiles: ["core"], exclusiveGroup: "second",
+    defaultInExclusiveGroup: name === "x", checkCommand: `check ${name}`,
+    installCommand: `install ${name}`, setupCommand: `setup ${name}`, uninstallCommands: [`remove ${name}`],
+  })));
+  const args = parsePluginArgs(["plan", "--profile", "a,core", "--choose", "graphs=c", "--choose", "second=y"]);
+  const plan = await buildInstallPlan(input, args, { runCheck: () => ({ status: 0 }) });
+  assert.deepEqual(plan.filter((entry) => !entry.cleanup).map((entry) => entry.name), ["c", "y"]);
+  assert.deepEqual(plan.filter((entry) => entry.cleanup).map((entry) => entry.name), ["a", "b", "x"]);
+  assert.match(plan.find((entry) => entry.name === "b").cleanupReason, /entry.*graphs.*profile.*graphs/);
+  assert.match(formatInstallPlan(plan), /second; override; selected y/);
+  const calls = [];
+  await applyInstallPlan(plan, {
+    runMutation: (command) => { calls.push(command); return { status: 0 }; },
+    runCheck: (command) => { calls.push(command); return { status: ["check c", "check y"].includes(command) ? 0 : 1 }; },
+  });
+  assert.deepEqual(calls, ["setup c", "setup y", "check c", "check y", "remove a", "check a", "remove b", "check b", "remove x", "check x"]);
+});
+
+test("plugin entry sync waits for an unrelated selected plugin to verify", async () => {
+  const input = itemExclusiveCatalog();
+  input.plugins.push({ ...input.plugins[0], name: "ordinary", exclusiveGroup: undefined, defaultInExclusiveGroup: undefined,
+    checkCommand: "check ordinary", installCommand: "install ordinary", setupCommand: "setup ordinary" });
+  const calls = [];
+  const plan = await buildInstallPlan(input, parsePluginArgs(["sync", "--profile", "docs"]), { runCheck: () => ({ status: 0 }) });
+  await assert.rejects(applyInstallPlan(plan, {
+    runMutation: (command) => { calls.push(command); return { status: 0 }; },
+    runCheck: (command) => ({ status: command === "check ordinary" ? 1 : 0 }),
+  }), /ordinary verification failed/);
+  assert.deepEqual(calls, ["setup a", "setup ordinary"]);
+});
+
 test("install and update allow exclusive plugins together without peer checks or cleanup", async () => {
   for (const command of ["install", "update"]) {
     for (const selector of [["--all"], ["--profile", "a,b,c"], ["--plugin", "a,b,c"]]) {
@@ -805,20 +962,21 @@ test("codebuddy global skills mismatch is reported only when the directories dif
   );
 });
 
-test("codebuddy global skills mismatch is cleared when the cli dir is a junction to the runtime dir", () => {
+test("codebuddy global skills mismatch is cleared when the cli dir is a junction to the runtime dir", (t) => {
   const base = mkdtempSync(join(tmpdir(), "cb-skills-"));
   const home = join(base, "home");
   const runtimeSkills = join(home, ".workbuddy", "skills");
   const cliSkills = join(home, ".codebuddy", "skills");
   mkdirSync(runtimeSkills, { recursive: true });
+  mkdirSync(join(home, ".codebuddy"), { recursive: true });
   try {
-    symlinkSync(runtimeSkills, cliSkills, "junction");
-  } catch {
-    // Junction creation may be unsupported in some environments; skip the assertion there.
-    rmSync(base, { recursive: true, force: true });
-    return;
-  }
-  try {
+    try {
+      symlinkSync(runtimeSkills, cliSkills, "junction");
+    } catch (error) {
+      if (!["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].includes(error.code)) throw error;
+      t.skip(`Junction creation is unavailable: ${error.code}`);
+      return;
+    }
     assert.equal(
       codebuddyGlobalSkillsMismatch({ CODEBUDDY_CONFIG_DIR: join(home, ".workbuddy") }, home),
       null,
@@ -1118,9 +1276,35 @@ test("codebase-memory removal preserves its interactive prompt before npm remova
       { platform, runCheck: () => ({ status: 0, stdout: "", stderr: "" }) },
     );
     assert.deepEqual(plan[0].actions, [
-      { stage: "uninstall", command: "codebase-memory-mcp uninstall" },
+      { stage: "uninstall", command: platform === "win32" ? "codebase-memory-mcp.cmd uninstall" : "codebase-memory-mcp uninstall" },
       { stage: "uninstall", command: expectedNpmCommand },
     ]);
+  }
+});
+
+test("shipped plugin lifecycle plans use Windows command shims and preserve POSIX commands", async () => {
+  const current = JSON.parse(await readFile(new URL("../pluginset.json", import.meta.url), "utf8"));
+  const expected = {
+    gitnexus: { setup: "setup -c codex", uninstall: "uninstall --force" },
+    codegraph: { setup: "install --target=codex --location=global --yes", uninstall: "uninstall --yes" },
+    "codebase-memory-mcp": { setup: "install --clients=codex -y", uninstall: "uninstall" },
+  };
+  for (const platform of ["win32", "linux", "darwin"]) {
+    const suffix = platform === "win32" ? ".cmd" : "";
+    const options = { platform, runCheck: () => ({ status: 0 }) };
+    const install = await buildInstallPlan(current, parsePluginArgs(["install", "--all", "--agent", "codex"]), options);
+    const remove = await buildRemovalPlan(current, parsePluginArgs(["remove", "--all", "--agent", "codex"]), options);
+    for (const item of install) {
+      assert.equal(item.checkCommand, `${item.name}${suffix} --version`);
+      assert.deepEqual(item.actions.map((action) => action.command), [`${item.name}${suffix} ${expected[item.name].setup}`]);
+      assert.equal(remove.find((removal) => removal.name === item.name).actions[0].command, `${item.name}${suffix} ${expected[item.name].uninstall}`);
+    }
+    const commands = [];
+    assert.equal(await main(["update", "--plugin", "codegraph", "--agent", "codex", "--yes"], {
+      catalog: current, ...options, runMutation: (command) => { commands.push(command); return { status: 0 }; },
+      write: () => {}, writeError: (error) => assert.fail(error),
+    }), 0);
+    assert.deepEqual(commands, [`codegraph${suffix} upgrade`, `codegraph${suffix} install --target=codex --location=global --yes`]);
   }
 });
 

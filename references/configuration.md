@@ -2,7 +2,7 @@
 
 `pluginset.json` is the version-controlled source of truth. Never add generated paths, credentials, system Skills, or plugin-cache Skills.
 
-Only entries in the current catalog are managed. Deleting an entry ends management of its installation; there is no historical ownership registry. Sync applies the selected profiles and their displaced same-group peers, preserving unrelated profiles and uncatalogued installations.
+Only entries in the current catalog are managed. Deleting an entry ends management; there is no historical ownership registry. Execution, installed-source conflict checks, and cleanup rules are defined in [operations.md](operations.md).
 
 ```json
 {
@@ -45,19 +45,21 @@ Only entries in the current catalog are managed. Deleting an entry ends manageme
 - `required: true` stops sync when its installation batch fails; optional failures are summarized and also prevent cleanup.
 - `reviewed: true` is required for installation. Provenance confidence and content review are separate decisions.
 
+## Exclusive Skill and plugin entries
+
+Individual `skills[]` and `plugins[]` entries may also declare `exclusiveGroup` and `defaultInExclusiveGroup`. Profile groups, Skill-entry groups, and plugin-entry groups are separate namespaces, even when their names match. Each entry group needs at least two entries and exactly one boolean `defaultInExclusiveGroup: true`; a default field requires a group. Group names are non-empty, case-sensitive strings with surrounding whitespace trimmed. All Skills in one entry group must have the same `scope`. A Skill entry's entire `names` array is selected or displaced together.
+
+Entry exclusivity applies across all profile memberships, including shared entries. `--choose <group>=<name>` is an invocation-local override, not a configuration field; a Skill name selects its entire `names` entry. Selection precedence, command restrictions, and cleanup checks are in [operations.md](operations.md#entry-alternatives).
+
+The shipped `docs` profile contains `op7418/humanizer-zh` and `LifelongLazyLearner/qu-ai-wei` in entry group `chinese-humanizer`, defaulting to `humanizer-zh`. Both are optional, global, and target `detected`.
+
 ## External plugins
 
 ### Exclusive plugin profiles
 
 The shipped plugins each use their own same-name profile: `gitnexus`, `codegraph`, and `codebase-memory-mcp`. All three have `exclusiveGroup: "codegraph"`; only profile `codegraph` has `defaultInExclusiveGroup: true`. The existing `mattpocock` and `superpowers` profiles remain in the separate `coding` group. Selecting a workflow alone no longer selects a plugin.
 
-The plugin manager validates non-empty, case-sensitive group names (trimming surrounding whitespace), at least two members per group, and exactly one boolean default. `plan` and `sync` reject incompatible explicit profiles and plugin selections before any checks. Multiple profiles on a shared plugin mean alternatives, not a requirement to select every profile. For plan/sync, `--all` selects plugins belonging to ordinary profiles or each group's default, once per plugin. `install`, `update`, and `remove` allow conflicting members; their `--all` selects every plugin. Ignoring exclusivity does not bypass catalog validation.
-
-Only sync plans (including the `plan` preview) include installed conflicting plugins owned by a single displaced profile. Shared plugins (multiple distinct profile memberships), unrelated plugins, and unmanaged tools are never automatic cleanup targets. All selected and cleanup target mappings and commands resolve before availability checks. A nonzero check status means unavailable; a check that cannot execute aborts planning. Install and update inspect only selected entries and never clean up peers.
-
-Automatic cleanup requires a uniquely determined profile in the group. Selecting only a shared plugin whose memberships leave multiple alternatives does not implicitly choose one or trigger cleanup in that group; select a specific profile or a compatible single-profile plugin to make the choice explicit.
-
-With `sync --yes`, all selected install and setup commands succeed first. During an exclusive selection, all selected plugins must then pass their availability checks before any cleanup starts. Cleanup executes existing uninstall commands in catalog order and checks each removed plugin is unavailable. Any failure stops the invocation and reports completed and pending actions without rollback. Cleanup does not require the old entry to be reviewed. Full uninstall may remove shared CLI integrations for other agents; verification does not detect residual upstream configuration. Every modification command without `--yes` only previews, including cleanup-only sync.
+Plugin profiles use the same group schema as Skill profiles. Multiple memberships mean the plugin belongs to any listed profile, not that every profile must be selected. A shared plugin alone does not identify a unique replacement profile; select a profile or a compatible single-profile plugin when replacement is intended. See [operations.md](operations.md#external-plugin-lifecycle) for lifecycle and full-uninstall behavior.
 
 Optional `setupCommand` and `updateCommand` may be omitted or set to JSON `null`. A null setup command is skipped; a null update command means updates are unsupported and an explicit update request fails before mutations. Required command fields, command array elements, and platform-map values cannot be null. Empty strings, objects, and arrays remain invalid.
 
@@ -77,6 +79,8 @@ Each plugin entry has these fields:
 | `updateCommand` | No | One CommandSpec or a non-empty ordered array; required for the update operation. |
 | `agents` | No | `["detected"]` or a non-empty list of explicit agent names; `detected` must appear alone. |
 | `agentMap` | No | Required for each resolved target when `agents` is present; maps agent names to upstream argument values. |
+| `exclusiveGroup` | No | Non-empty entry group, independent of profile and Skill groups; at least two plugin entries per group. |
+| `defaultInExclusiveGroup` | No | Boolean; requires `exclusiveGroup`, with exactly one true default per entry group. |
 
 ### Plugin agent targets
 
@@ -84,21 +88,22 @@ Each plugin entry has these fields:
 {
   "agents": ["detected"],
   "agentMap": { "codex": "codex" },
-  "setupCommand": "codegraph install --target={agent} --location=global --yes"
+  "setupCommand": {
+    "default": "codegraph install --target={agent} --location=global --yes",
+    "win32": "codegraph.cmd install --target={agent} --location=global --yes"
+  }
 }
 ```
 
 Use explicit names such as `["codex", "claude-code"]` to configure multiple agents. Every actual target must have its own `agentMap` entry, even when commands do not contain placeholders. Map keys, values, and agent names accept only ASCII letters, digits, hyphens, and underscores. Empty maps, arrays, null mappings, and missing mappings are errors. The shipped plugins initially map only `codex`; verify a tool's upstream parameter before adding other mappings.
 
-`--agent a,b` (repeatable) resolves only `detected`; explicitly configured agents are not overridden. Resolution order is CLI override, `MY_SKILLS_AGENT`, then the active Codex or Claude Code environment. Multiple runtime matches or no runtime match are errors. Names are deduplicated in first-seen order.
+`--agent a,b` (repeatable) resolves only `detected`; explicitly configured agents are not overridden. Resolution order is CLI override, `MY_SKILLS_AGENT`, then the active runtime. Supported runtime markers and installed-agent discovery are documented in [agent-detection.md](agent-detection.md).
 
 After selecting the platform, each command containing `{agent}` expands in target order. Arrays execute command-first: command 1 for every target, then command 2. Targets mapping to the same upstream value execute that command once. Commands without `{agent}` execute once, including shared CLI installation, update, and removal. `checkCommand` cannot contain `{agent}`. All selected targets and commands are resolved before any availability check. Errors identify the failed target and stop subsequent commands and plugins.
 
 Legacy entries without `agents` retain their behavior, but cannot contain `{agent}` or `agentMap`. Removal remains a full uninstall: target selection does not protect other agents from shared CLI removal or upstream commands that remove all integrations. The preview explicitly reports this scope; there is no separate `--uninstall-cli` option.
 
-`updateCommand` supports the same string, platform map, and mixed array forms as `installCommand`. Existing catalogs may omit it; selecting an entry without it for `update` fails before mutations. Update requires an available CLI, runs every update command followed by setup, and never falls back to installation.
-
-`checkCommand` and every member of `uninstallCommands` use one `CommandSpec`. `installCommand` and optional `setupCommand` accept either one `CommandSpec` or a non-empty array of them:
+`checkCommand` and every member of `uninstallCommands` use one `CommandSpec`. `installCommand`, `setupCommand`, and `updateCommand` accept either one `CommandSpec` or a non-empty array of them:
 
 ```text
 CommandSpec = non-empty string
@@ -114,7 +119,7 @@ For a platform map, the manager first selects the key equal to `process.platform
 
 Before any command runs, validation rejects duplicate plugin names, empty arrays, unknown profile references, missing required fields, unknown plugin fields, and non-boolean `reviewed` values. Plugin profile membership does not inherit `defaultProfiles`; callers must explicitly select a profile, plugin name, or `--all`.
 
-Command arrays may mix strings and platform maps. Nested arrays and empty arrays are invalid. Commands execute in array order, with all installation commands preceding setup commands. Any failure stops the entire invocation. When the availability check succeeds, all installation commands are skipped; setup commands still run. Each command uses a separate shell process, so shell variables and directory changes do not carry over to the next command.
+Command arrays may mix strings and platform maps. Nested arrays and empty arrays are invalid. Each command uses a separate shell process, so shell variables and directory changes do not carry over to the next command. Windows npm-installed CLIs should use explicit `.cmd` entries, avoiding PowerShell execution-policy dependence on `.ps1` shims. Lifecycle order and availability checks are described in operations.
 
 ```json
 {
@@ -129,20 +134,9 @@ Command arrays may mix strings and platform maps. Nested arrays and empty arrays
 }
 ```
 
-## Exclusive profiles
+## Shared entries
 
-Skills `install` and `remove` allow same-group profiles together and never perform automatic peer cleanup. Their `--all` selects every profile. Install without a selector uses `defaultProfiles`; remove must specify `--profile` or `--all`. Explicit removal selects catalog entries even if shared with other profiles, displays their memberships, removes only installed links for the resolved configured agents and scope, and verifies each removal batch before proceeding. Missing entries and local sources are skipped. Removal does not require `reviewed: true`; uncatalogued Skills are not touched. Without `--yes`, installation, removal and sync only preview; there is no interactive confirmation or cleanup-only exception.
-
-
-Explicitly selecting two members of one group is rejected before runtime detection or installation inspection:
-
-```shell
-node scripts/manage-skills.mjs plan --profile coding-a,coding-b
-```
-
-Shared Skills belong to both profiles in one catalog entry, for example `"profiles": ["coding-a", "coding-b"]`. Do not duplicate a Skill entry: names remain unique per scope.
-
-For `plan` and `sync`, `--all` selects every profile outside an exclusive group plus the default member of each group. Sync removes installed remote Skills that are managed exclusively by displaced members, while preserving shared, non-conflicting, unmanaged, and local-source Skills. `audit --all` remains a full-catalog audit and includes every member because it never changes anything.
+Shared Skills belong to multiple profiles in one catalog entry, for example `"profiles": ["coding-a", "coding-b"]`. Do not duplicate a Skill entry: names remain unique per scope. Profile sharing protects against profile-only cleanup; entry exclusivity remains independent. Command-specific selection and audit behavior are in operations.
 
 ## Local sources
 
@@ -150,7 +144,7 @@ Treat absolute paths, `./`, `../`, `.`, `..`, and Windows drive paths as local. 
 
 ## Agent resolution
 
-Resolve `detected` in order: manager `--agent`, `MY_SKILLS_AGENT`, then Codex/Claude runtime markers. Stop on no match or ambiguity. Skills CLI chooses the physical directory from scope and agent; verify `skills list --json` when isolation matters rather than assuming a fixed path.
+Resolve `detected` in order: manager `--agent`, `MY_SKILLS_AGENT`, then active runtime markers. Stop on no match or ambiguity; see [agent-detection.md](agent-detection.md). Skills CLI chooses the physical directory from scope and agent; verify `skills list --json` when isolation matters rather than assuming a fixed path.
 
 ## Add an entry
 

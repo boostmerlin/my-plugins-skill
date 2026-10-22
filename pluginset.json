@@ -30,11 +30,26 @@
     "docs": {
       "description": "Document, spreadsheet, and presentation skills"
     },
+    "ui": {
+      "description": "UI design, typography, color, accessibility, layout, and product writing skills"
+    },
     "marketing": {
       "description": "Marketing strategy, content, SEO, CRO, and growth skills"
+    },
+    "other": {
+      "description": "其它：通用工具、交互解释与未归入其他分类的技能"
     }
   },
   "skills": [
+    {
+      "package": "wheresryan22/anatomy",
+      "names": ["anatomy"],
+      "profiles": ["other"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
     {
       "package": "vercel-labs/skills",
       "names": ["find-skills"],
@@ -54,13 +69,54 @@
       "reviewed": true
     },
     {
+      "package": "op7418/humanizer-zh",
+      "names": ["humanizer-zh"],
+      "profiles": ["docs"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true,
+      "exclusiveGroup": "chinese-humanizer",
+      "defaultInExclusiveGroup": true
+    },
+    {
+      "package": "LifelongLazyLearner/qu-ai-wei",
+      "names": ["qu-ai-wei"],
+      "profiles": ["docs"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true,
+      "exclusiveGroup": "chinese-humanizer"
+    },
+    {
       "package": "mattpocock/skills",
       "names": [
-        "grill-me",
-        "grilling",
-        "improve-codebase-architecture",
+        "ask-matt",
+        "code-review",
         "codebase-design",
-        "domain-modeling"
+        "diagnosing-bugs",
+        "domain-modeling",
+        "grill-me",
+        "grill-with-docs",
+        "grilling",
+        "handoff",
+        "implement",
+        "improve-codebase-architecture",
+        "prototype",
+        "research",
+        "resolving-merge-conflicts",
+        "setup-matt-pocock-skills",
+        "tdd",
+        "teach",
+        "to-questionnaire",
+        "to-spec",
+        "to-tickets",
+        "triage",
+        "wait-what",
+        "wayfinder",
+        "wizard",
+        "writing-for-agents"
       ],
       "profiles": ["mattpocock"],
       "scope": "global",
@@ -123,6 +179,38 @@
       "package": "openai/skills",
       "names": ["playwright"],
       "profiles": ["mattpocock", "superpowers"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "jakubkrehel/skills",
+      "names": [
+        "better-accessibility",
+        "better-colors",
+        "better-interface",
+        "better-layout",
+        "better-typography",
+        "better-ui",
+        "better-writing",
+        "break",
+        "build-design",
+        "explain-interface",
+        "interface-review",
+        "state-machine",
+        "variant"
+      ],
+      "profiles": ["ui"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "https://uizze.com",
+      "names": ["ui-design", "ui-radar"],
+      "profiles": ["ui"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -203,13 +291,19 @@
         "default": "npm install -g gitnexus@latest",
         "win32": "npm.cmd install -g gitnexus@latest"
       },
-      "setupCommand": "gitnexus setup -c {agent}",
+      "setupCommand": {
+        "default": "gitnexus setup -c {agent}",
+        "win32": "gitnexus.cmd setup -c {agent}"
+      },
       "updateCommand": {
         "default": "npm install -g gitnexus@latest",
         "win32": "npm.cmd install -g gitnexus@latest"
       },
       "uninstallCommands": [
-        "gitnexus uninstall --force",
+        {
+          "default": "gitnexus uninstall --force",
+          "win32": "gitnexus.cmd uninstall --force"
+        },
         {
           "default": "npm uninstall -g gitnexus",
           "win32": "npm.cmd uninstall -g gitnexus"
@@ -222,15 +316,27 @@
       "agents": ["detected"],
       "agentMap": { "codex": "codex" },
       "profiles": ["codegraph"],
-      "checkCommand": "codegraph --version",
+      "checkCommand": {
+        "default": "codegraph --version",
+        "win32": "codegraph.cmd --version"
+      },
       "installCommand": {
         "default": "npm install -g @colbymchenry/codegraph",
         "win32": "npm.cmd install -g @colbymchenry/codegraph"
       },
-      "setupCommand": "codegraph install --target={agent} --location=global --yes",
-      "updateCommand": "codegraph upgrade",
+      "setupCommand": {
+        "default": "codegraph install --target={agent} --location=global --yes",
+        "win32": "codegraph.cmd install --target={agent} --location=global --yes"
+      },
+      "updateCommand": {
+        "default": "codegraph upgrade",
+        "win32": "codegraph.cmd upgrade"
+      },
       "uninstallCommands": [
-        "codegraph uninstall --yes"
+        {
+          "default": "codegraph uninstall --yes",
+          "win32": "codegraph.cmd uninstall --yes"
+        }
       ],
       "reviewed": true
     },
@@ -239,18 +345,27 @@
       "agents": ["detected"],
       "agentMap": { "codex": "codex" },
       "profiles": ["codebase-memory-mcp"],
-      "checkCommand": "codebase-memory-mcp --version",
+      "checkCommand": {
+        "default": "codebase-memory-mcp --version",
+        "win32": "codebase-memory-mcp.cmd --version"
+      },
       "installCommand": {
         "default": "npm install -g codebase-memory-mcp@latest",
         "win32": "npm.cmd install -g codebase-memory-mcp@latest"
       },
-      "setupCommand": "codebase-memory-mcp install --clients={agent} -y",
+      "setupCommand": {
+        "default": "codebase-memory-mcp install --clients={agent} -y",
+        "win32": "codebase-memory-mcp.cmd install --clients={agent} -y"
+      },
       "updateCommand": {
         "default": "npm install -g codebase-memory-mcp@latest",
         "win32": "npm.cmd install -g codebase-memory-mcp@latest"
       },
       "uninstallCommands": [
-        "codebase-memory-mcp uninstall",
+        {
+          "default": "codebase-memory-mcp uninstall",
+          "win32": "codebase-memory-mcp.cmd uninstall"
+        },
         {
           "default": "npm uninstall -g codebase-memory-mcp",
           "win32": "npm.cmd uninstall -g codebase-memory-mcp"

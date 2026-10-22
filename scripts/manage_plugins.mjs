@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectActiveAgents, detectInstalledAgents } from "./agent-detection.mjs";
+import { assertStringArray, parseChoice, validateExclusiveGroups, validateProfiles } from "./catalog.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const catalogPath = join(root, "pluginset.json");
@@ -20,17 +21,13 @@ const pluginFields = new Set([
   "setupCommand",
   "uninstallCommands",
   "reviewed",
+  "exclusiveGroup",
+  "defaultInExclusiveGroup",
 ]);
 
 function assertNonEmptyString(value, label) {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${label} must be a non-empty string`);
-  }
-}
-
-function assertStringArray(value, label) {
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || !item.trim())) {
-    throw new Error(`${label} must be a non-empty array of strings`);
   }
 }
 
@@ -68,33 +65,8 @@ function resolveCommandList(value, platform, label) {
 function validatePluginCatalog(catalog, { platform = process.platform } = {}) {
   if (!catalog || typeof catalog !== "object" || Array.isArray(catalog)) throw new Error("catalog must be an object");
   if (catalog.schemaVersion !== 1) throw new Error("schemaVersion must be 1");
-  if (!catalog.profiles || typeof catalog.profiles !== "object" || Array.isArray(catalog.profiles)) {
-    throw new Error("profiles must be an object");
-  }
+  validateProfiles(catalog.profiles);
   if (!Array.isArray(catalog.plugins)) throw new Error("plugins must be an array");
-  const groups = new Map();
-  for (const [name, profile] of Object.entries(catalog.profiles)) {
-    if (!profile || typeof profile !== "object" || Array.isArray(profile)) throw new Error(`Invalid profile: ${name}`);
-    if (profile.exclusiveGroup !== undefined) {
-      assertNonEmptyString(profile.exclusiveGroup, `profiles.${name}.exclusiveGroup`);
-      profile.exclusiveGroup = profile.exclusiveGroup.trim();
-    }
-    if (profile.defaultInExclusiveGroup !== undefined) {
-      if (!profile.exclusiveGroup || typeof profile.defaultInExclusiveGroup !== "boolean") {
-        throw new Error(`profiles.${name}.defaultInExclusiveGroup requires exclusiveGroup and a boolean`);
-      }
-    }
-    if (profile.exclusiveGroup) {
-      if (!groups.has(profile.exclusiveGroup)) groups.set(profile.exclusiveGroup, []);
-      groups.get(profile.exclusiveGroup).push(profile);
-    }
-  }
-  for (const [group, members] of groups) {
-    if (members.length < 2) throw new Error(`Exclusive group ${group} must contain at least two profiles`);
-    if (members.filter((p) => p.defaultInExclusiveGroup === true).length !== 1) {
-      throw new Error(`Exclusive group ${group} must have exactly one defaultInExclusiveGroup profile`);
-    }
-  }
 
   const names = new Set();
   catalog.plugins.forEach((entry, index) => {
@@ -130,6 +102,7 @@ function validatePluginCatalog(catalog, { platform = process.platform } = {}) {
     if (names.has(identity)) throw new Error(`Duplicate plugin name: ${entry.name}`);
     names.add(identity);
   });
+  validateExclusiveGroups(catalog.plugins, "Plugin entry");
   return catalog;
 }
 
@@ -155,6 +128,9 @@ function parsePluginArgs(argv) {
     if (arg === "--yes") result.yes = true;
     else if (arg === "--all") result.all = true;
     else if (arg === "--detect-installed") result.detectInstalled = true;
+    else if (arg === "--choose") {
+      (result.choices ??= []).push(parseChoice(argv[++index]));
+    }
     else if (arg === "--profile") {
       result.profiles = mergeValues(result.profiles, argv[index + 1], "--profile");
       index += 1;
@@ -170,6 +146,7 @@ function parsePluginArgs(argv) {
     else throw new Error(`Unknown option: ${arg}`);
   }
   if (result.command === "help") return result;
+  if (result.choices && !["plan", "sync"].includes(result.command)) throw new Error("--choose is supported only by plan and sync");
   if (result.detectInstalled && result.agents) throw new Error("--detect-installed and --agent are mutually exclusive");
   if (!["plan", "sync", "install", "update", "remove"].includes(result.command)) throw new Error(`Unknown command: ${result.command}`);
   const selectorCount = Number(Boolean(result.profiles)) + Number(Boolean(result.plugins)) + Number(result.all);
@@ -206,7 +183,28 @@ function pluginSelection(catalog, args) {
     }
     selected = catalog.plugins.filter((entry) => requested.has(entry.name.toLowerCase()));
   }
+  const entrySelections = new Map();
   if (enforceExclusive) {
+    const entryGroups = validateExclusiveGroups(catalog.plugins, "Plugin entry");
+    const overrides = new Map();
+    for (const { group, name } of args.choices ?? []) {
+      const members = entryGroups.get(group);
+      if (!members) throw new Error(`Unknown --choose plugin group: ${group}`);
+      const member = members.find((entry) => entry.name.toLowerCase() === name.toLowerCase());
+      if (!member) throw new Error(`Unknown --choose member ${name} in ${group}`);
+      if (!selected.includes(member)) throw new Error(`--choose ${group}=${name} is outside the current selection`);
+      if (overrides.has(group) && overrides.get(group) !== member) throw new Error(`Conflicting --choose values for ${group}`);
+      overrides.set(group, member);
+    }
+    for (const [group, members] of entryGroups) {
+      const candidates = members.filter((entry) => selected.includes(entry));
+      if (!candidates.length) continue;
+      if (args.plugins && candidates.length > 1) throw new Error(`Selected plugins conflict in entry exclusive group ${group}`);
+      const chosen = overrides.get(group) ?? (candidates.length === 1 ? candidates[0] : candidates.find((entry) => entry.defaultInExclusiveGroup === true));
+      if (!chosen) throw new Error(`Default plugin for entry exclusive group ${group} is outside the selection; use --choose`);
+      entrySelections.set(group, { entry: chosen, source: overrides.has(group) ? "override" : args.plugins ? "explicit plugin" : candidates.length === 1 ? "single candidate" : "default" });
+    }
+    selected = selected.filter((entry) => !entry.exclusiveGroup || entrySelections.get(entry.exclusiveGroup)?.entry === entry);
     // A shared plugin can belong to either member; it must not force both.
     for (const entry of selected) {
       const memberships = new Set(entry.profiles.map((p) => catalog.profiles[p].exclusiveGroup));
@@ -217,7 +215,7 @@ function pluginSelection(catalog, args) {
       groups.set(group, compatible);
     }
   }
-  return { selected, groups };
+  return { selected, groups, entrySelections };
 }
 
 function selectPlugins(catalog, args) {
@@ -300,11 +298,18 @@ function resolvePluginCommands(entry, platform) {
 
 async function inspectSelectedPlugins(catalog, args, { platform = process.platform, runCheck, env = process.env, discovery }) {
   const selection = pluginSelection(catalog, args);
-  const cleanup = !["plan", "sync"].includes(args.command) ? [] : catalog.plugins.filter((entry) =>
-    !selection.selected.includes(entry) && new Set(entry.profiles).size === 1 && entry.profiles.every((name) => {
+  const cleanupReasons = new Map();
+  const cleanup = !["plan", "sync"].includes(args.command) ? [] : catalog.plugins.filter((entry) => {
+    if (selection.selected.includes(entry)) return false;
+    const reasons = [];
+    if (entry.exclusiveGroup && selection.entrySelections.has(entry.exclusiveGroup)) reasons.push(`entry exclusive group ${entry.exclusiveGroup}`);
+    if (new Set(entry.profiles).size === 1 && entry.profiles.every((name) => {
       const group = catalog.profiles[name].exclusiveGroup;
       return selection.groups.get(group)?.size === 1 && !selection.groups.get(group).has(name);
-    }));
+    })) reasons.push(`profile exclusive group ${catalog.profiles[entry.profiles[0]].exclusiveGroup}`);
+    if (reasons.length) cleanupReasons.set(entry, reasons.join("; "));
+    return reasons.length > 0;
+  });
   const selected = [...selection.selected, ...cleanup].map((entry) => {
     validateAgentConfig(entry, entry.name);
     const targets = resolvePluginAgents(entry, args, env, discovery);
@@ -312,7 +317,12 @@ async function inspectSelectedPlugins(catalog, args, { platform = process.platfo
     for (const field of ["installCommands", "updateCommands", "setupCommands", "uninstallCommands"]) {
       commands[field] = expandCommands(commands[field], targets);
     }
-    return { entry, commands, agents: targets.map(({ name }) => name), cleanup: cleanup.includes(entry), verify: selection.groups.size > 0 };
+    return { entry, commands, agents: targets.map(({ name }) => name), cleanup: cleanup.includes(entry),
+      cleanupReason: cleanupReasons.get(entry),
+      exclusiveGroup: entry.exclusiveGroup,
+      selectionSource: selection.entrySelections.get(entry.exclusiveGroup)?.source,
+      selectedMember: selection.entrySelections.get(entry.exclusiveGroup)?.entry.name,
+      verify: selection.groups.size > 0 || selection.entrySelections.size > 0 };
   });
   const inspected = [];
   for (const item of selected) {
@@ -326,13 +336,14 @@ async function inspectSelectedPlugins(catalog, args, { platform = process.platfo
 
 async function buildInstallPlan(catalog, args, options) {
   const inspected = await inspectSelectedPlugins(catalog, args, options);
-  return inspected.map(({ entry, commands, agents, check, installed, cleanup, verify }) => ({
+  return inspected.map(({ entry, commands, agents, check, installed, cleanup, verify, cleanupReason, exclusiveGroup, selectionSource, selectedMember }) => ({
     name: entry.name,
     agents,
     reviewed: entry.reviewed,
     installed,
     cleanup,
     verify,
+    cleanupReason, exclusiveGroup, selectionSource, selectedMember,
     checkCommand: commands.checkCommand,
     checkStatus: check.status,
     actions: cleanup ? commands.uninstallCommands.map((action) => ({ stage: "uninstall", ...action })) : [
@@ -381,6 +392,8 @@ function formatInstallPlan(plan, { update = false, sync = false } = {}) {
   if (plan.some((item) => item.cleanup)) lines.push("Cleanup runs only after all selected plugins succeed and pass verification. Full uninstall: shared CLI removal may affect other agents.");
   for (const item of plan) {
     lines.push(`${item.cleanup ? "[CLEANUP]" : item.reviewed ? "[REVIEWED]" : "[BLOCKED]"} ${item.name}`);
+    if (item.selectionSource) lines.push(`  ENTRY GROUP: ${item.exclusiveGroup}; ${item.selectionSource}; selected ${item.selectedMember}`);
+    if (item.cleanupReason) lines.push(`  REASON: ${item.cleanupReason}`);
     if (item.agents?.length) lines.push(`  AGENTS: ${item.agents.join(", ")}`);
     lines.push(`  CHECK: ${item.checkCommand}`);
     if (item.installed && !update && !item.cleanup) lines.push("  SKIP INSTALL: CLI is available");
@@ -526,12 +539,15 @@ Options:
   --profile <a,b>  Select plugins assigned to profiles
   --plugin <a,b>   Select plugins by name
   --all            plan/sync: ordinary/default profiles; install/update/remove: every plugin
+  --choose <group>=<name>  Temporarily select an entry-group member (repeatable; plan/sync only)
   --agent <a,b>    Resolve detected agents (repeatable; does not override explicit catalog agents)
   --detect-installed  Resolve detected from installed global agent configs, not the active session
   --yes            Execute a displayed sync, install, update, or removal plan
   --help            Show this help
 
 plan previews sync. Only sync enforces exclusivity and cleans up displaced plugins.
+Profile and plugin entry groups are independent. Entry groups use their default unless --choose
+or an explicit --plugin selects a member. Choices are not saved.
 install/update/remove allow same-group plugins together and do not clean up peers.
 Without --yes, modification commands only preview their actions.`;
 }

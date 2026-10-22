@@ -17,6 +17,10 @@ Turn raw command output into a compact Markdown report in the user's language. P
 
 Show the selected profiles, target agent, scope, total skills, and batch count before the exact source plan. Group skills by install batch and preserve whether each batch is required or optional.
 
+Keep explicit source conflicts, local installations, and protected-path matches visible as blocked identities; do not count them as missing or ordinary install candidates. Missing source metadata alone is not a conflict. For a local-only replacement block, identify the affected exclusive group and target agent. A version-update plan lists the exact eligible names per scope, excludes unmanaged/local items, and states when an empty list produces no command.
+
+For entry alternatives, show the manager-specific group name, selected entry (all Skill names), and choice source: default, explicit `--choose`/`--plugin`, or sole candidate. Label cleanup reasons as profile conflict, entry conflict, or both, without double-counting one removal. State that `--choose` is temporary and later runs without it use defaults. Show the actual intersected target agents for Skill entry cleanup and the full-uninstall scope for plugins.
+
 ```markdown
 ## 同步计划
 
@@ -32,14 +36,16 @@ Profile：`core` · `superpowers`
 ### 安全边界
 
 - ✓ 所有计划来源均已审核
-- ✓ 未纳管、共享、非冲突和本地 Skill 不会被删除
+- ✓ 未纳管、非冲突和本地 Skill 保留；共享 Skill 仅在显式条目互斥时可能被清理
 
 ### 下一步
 
-确认后开始安装；安装全部成功后自动清理互斥 Skill。**是否执行？**
+确认后开始安装；安装全部成功并验证可用后自动清理互斥 Skill。**是否执行？**
 ```
 
 For a large batch, show its count and all exact names. Wrap naturally inside the table cell; do not replace the names with a wildcard if doing so would make the approval plan ambiguous.
+
+The confirmation example applies only when authorization is still missing. With existing explicit authorization, present the concrete plan and proceed without repeating the question.
 
 ## Sync result
 
@@ -77,6 +83,7 @@ Omit empty sections. If installation partially fails, replace the success headin
 - With no drift, lead with `✓` and say the audited profile count and managed skill count.
 - With drift, lead with `!`, group findings as missing, wrong agent links, blocked, local, and unmanaged. Show counts before names.
 - A local or unmanaged entry is not an installation failure. State whether it was preserved.
+- Explicit-profile audit requires only the chosen entry and reports installed alternatives as conflicts; full-catalog audit still expects every configured variant. Include the chosen groups and overrides so the audit scope is clear.
 - Do not call an audit successful when its exit code is nonzero; say that the audit completed and explain the drift that produced the code.
 
 ## Risk wording

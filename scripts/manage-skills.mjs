@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectActiveAgents, codebuddyGlobalSkillsMismatch } from "./agent-detection.mjs";
+import { assertStringArray, validateProfiles, validateExclusiveGroups, parseChoice } from "./catalog.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const catalogPath = join(root, "pluginset.json");
@@ -36,6 +37,7 @@ Commands:
 
 Options:
   --profile <a,b>  Select comma-separated profiles
+  --choose <group>=<name>  Override an entry group for plan/sync or profile audit (repeatable)
   --all            plan/sync: compatible defaults; install/remove/audit: every profile
   --agent <a,b>    Resolve catalog agent "detected" (otherwise infer the active agent)
   --json           Emit stable machine-readable source results
@@ -64,6 +66,8 @@ function parseArgs(argv) {
       result.yes = true;
     } else if (arg === "--all") {
       result.allProfiles = true;
+    } else if (arg === "--choose") {
+      (result.choices ??= []).push(parseChoice(argv[++index]));
     } else if (arg === "--json" && result.command === "sources") {
       result.json = true;
     } else if (arg === "--verify-remote" && result.command === "sources") {
@@ -94,13 +98,10 @@ function parseArgs(argv) {
   if (result.command === "remove" && !result.profiles && !result.allProfiles) {
     throw new Error("remove requires --profile or --all");
   }
-  return result;
-}
-
-function assertStringArray(value, label) {
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || !item.trim())) {
-    throw new Error(`${label} must be a non-empty array of strings`);
+  if (result.choices && !(["plan", "sync"].includes(result.command) || (result.command === "audit" && result.profiles))) {
+    throw new Error("--choose requires plan, sync, or audit --profile");
   }
+  return result;
 }
 
 async function loadCatalog() {
@@ -137,45 +138,12 @@ function assertCompatibleProfiles(catalog, profiles, label = "Selected profiles"
 
 function validateCatalog(catalog) {
   if (catalog.schemaVersion !== 1) throw new Error("schemaVersion must be 1");
-  if (!catalog.profiles || typeof catalog.profiles !== "object" || Array.isArray(catalog.profiles)) {
-    throw new Error("profiles must be an object");
-  }
+  validateProfiles(catalog.profiles);
   assertStringArray(catalog.defaultProfiles, "defaultProfiles");
   if (!Array.isArray(catalog.skills)) throw new Error("skills must be an array");
 
-  const exclusiveGroups = new Map();
-  for (const [name, profile] of Object.entries(catalog.profiles)) {
-    if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
-      throw new Error(`profiles.${name} must be an object`);
-    }
-    if (profile.exclusiveGroup !== undefined) {
-      if (typeof profile.exclusiveGroup !== "string" || !profile.exclusiveGroup.trim()) {
-        throw new Error(`profiles.${name}.exclusiveGroup must be a non-empty string`);
-      }
-      profile.exclusiveGroup = profile.exclusiveGroup.trim();
-    }
-    if (profile.defaultInExclusiveGroup !== undefined && typeof profile.defaultInExclusiveGroup !== "boolean") {
-      throw new Error(`profiles.${name}.defaultInExclusiveGroup must be boolean`);
-    }
-    if (profile.defaultInExclusiveGroup !== undefined && !profile.exclusiveGroup) {
-      throw new Error(`profiles.${name}.defaultInExclusiveGroup requires exclusiveGroup`);
-    }
-    if (profile.exclusiveGroup) {
-      if (!exclusiveGroups.has(profile.exclusiveGroup)) exclusiveGroups.set(profile.exclusiveGroup, []);
-      exclusiveGroups.get(profile.exclusiveGroup).push({ name, isDefault: profile.defaultInExclusiveGroup === true });
-    }
-  }
-
-  for (const [group, members] of exclusiveGroups) {
-    if (members.length < 2) throw new Error(`Exclusive group ${group} must contain at least two profiles`);
-    const defaults = members.filter((member) => member.isDefault);
-    if (defaults.length !== 1) {
-      throw new Error(`Exclusive group ${group} must have exactly one defaultInExclusiveGroup profile`);
-    }
-  }
-
   for (const profile of catalog.defaultProfiles) {
-    if (!catalog.profiles[profile]) throw new Error(`Unknown default profile: ${profile}`);
+    if (!Object.hasOwn(catalog.profiles, profile)) throw new Error(`Unknown default profile: ${profile}`);
   }
   assertCompatibleProfiles(catalog, [...new Set(catalog.defaultProfiles)], "defaultProfiles");
 
@@ -194,7 +162,7 @@ function validateCatalog(catalog) {
       throw new Error(`${label}.agents must use detected by itself`);
     }
     for (const profile of entry.profiles) {
-      if (!catalog.profiles[profile]) throw new Error(`${label} references unknown profile: ${profile}`);
+      if (!Object.hasOwn(catalog.profiles, profile)) throw new Error(`${label} references unknown profile: ${profile}`);
     }
     for (const name of entry.names) {
       const identity = `${entry.scope}:${name.toLowerCase()}`;
@@ -203,7 +171,42 @@ function validateCatalog(catalog) {
     }
   });
 
+  skillEntryGroups(catalog);
   return catalog;
+}
+
+function skillEntryGroups(catalog) {
+  const groups = validateExclusiveGroups(catalog.skills, "Skill");
+  for (const [group, members] of groups) {
+    if (new Set(members.map(e => e.scope)).size !== 1) throw new Error(`Skill entry group ${group} must use the same scope`);
+  }
+  return groups;
+}
+
+function selectSkillEntries(catalog, profiles, choices = []) {
+  const groups = skillEntryGroups(catalog);
+  const candidates = catalog.skills.filter(e => e.profiles.some(p => profiles.includes(p)));
+  const overrides = new Map();
+  for (const { group, name } of choices) {
+    const entry = groups.get(group)?.find(e => e.names.some(n => n.toLowerCase() === name.toLowerCase()));
+    if (!entry) throw new Error(`Unknown skill entry choice: ${group}=${name}`);
+    if (!candidates.includes(entry)) throw new Error(`Skill entry choice is outside selected profiles: ${group}=${name}`);
+    if (overrides.has(group) && overrides.get(group) !== entry) throw new Error(`Conflicting choices for skill entry group ${group}`);
+    overrides.set(group, entry);
+  }
+  const selectedGroups = new Map();
+  for (const [group, members] of groups) {
+    const available = members.filter(e => candidates.includes(e));
+    if (!available.length) continue;
+    const selected = overrides.get(group) ?? (available.length === 1 ? available[0] : available.find(e => e.defaultInExclusiveGroup));
+    if (!selected) throw new Error(`Default for skill entry group ${group} is outside selected profiles; use --choose`);
+    selectedGroups.set(group, { entry: selected, source: overrides.has(group) ? "override" : available.length === 1 ? "single candidate" : "default" });
+  }
+  return { entries: candidates.filter(e => !e.exclusiveGroup || selectedGroups.get(e.exclusiveGroup)?.entry === e), groups: selectedGroups };
+}
+
+function expandSkillEntries(entries) {
+  return entries.flatMap(entry => entry.names.map(name => ({ ...entry, name })));
 }
 
 function run(command, args) {
@@ -303,6 +306,9 @@ async function inspectGitProvenance(installedPath) {
   const rootResult = run("git", ["-C", target, "rev-parse", "--show-toplevel"]);
   if (rootResult.error || rootResult.status !== 0) return { evidence: null, error: null };
   const gitRoot = rootResult.stdout.trim();
+  const skillPath = relative(gitRoot, join(target, "SKILL.md")).replaceAll("\\", "/");
+  const trackedResult = run("git", ["-C", gitRoot, "--literal-pathspecs", "ls-files", "--error-unmatch", "--", skillPath]);
+  if (trackedResult.error || trackedResult.status !== 0) return { evidence: null, error: null };
   const remoteResult = run("git", ["-C", gitRoot, "config", "--get", "remote.origin.url"]);
   if (remoteResult.error || remoteResult.status !== 0 || !remoteResult.stdout.trim()) {
     return { evidence: null, error: null };
@@ -312,7 +318,7 @@ async function inspectGitProvenance(installedPath) {
   const evidence = evidenceSource("git", remote, remote, process.cwd(), {
     repositoryRoot: gitRoot,
     resolvedPath: target,
-    skillPath: relative(gitRoot, join(target, "SKILL.md")).replaceAll("\\", "/"),
+    skillPath,
   });
   return { evidence, error: null };
 }
@@ -619,7 +625,7 @@ function selectProfiles(catalog, requested, allProfiles = false, { allowConflict
   const profiles = [...new Set(selected)];
   if (profiles.length === 0) throw new Error("At least one profile is required");
   for (const profile of profiles) {
-    if (!catalog.profiles[profile]) throw new Error(`Unknown profile: ${profile}`);
+    if (!Object.hasOwn(catalog.profiles, profile)) throw new Error(`Unknown profile: ${profile}`);
   }
   if (!allowConflicts) assertCompatibleProfiles(catalog, profiles);
   return profiles;
@@ -642,6 +648,30 @@ function installedForAgents(installed, skill, targetAgents) {
   );
 }
 
+function installedSourceConflict(skill, installed, targetAgents) {
+  const targets = targetAgents && new Set(targetAgents.map(normalizeAgent));
+  const repositoryId = (source) => {
+    const normalized = normalizeSource(source);
+    // Installation URLs may select a GitHub subdirectory; ownership is repository-wide.
+    return normalized?.type === "github" ? normalized.id.split("/").slice(0, 2).join("/") : normalized?.id;
+  };
+  for (const entry of installed) {
+    if (entry.scope !== skill.scope || String(entry.name).toLowerCase() !== skill.name.toLowerCase()) continue;
+    if (targets && !(entry.agents || []).some(agent => targets.has(normalizeAgent(agent)))) continue;
+    if (isExcludedInstalledPath(entry.path)) return `installed path is protected: ${entry.path}`;
+    if (entry.sourceType === "local") return "installed skill has a local source";
+    for (const source of [entry.source, entry.sourceUrl]) {
+      const normalized = normalizeSource(source);
+      if (!normalized) continue;
+      if (normalized.type === "local") return `installed skill has a local source: ${source}`;
+      if (repositoryId(source) !== repositoryId(skill.package)) {
+        return `installed source ${source} conflicts with catalog source ${skill.package}`;
+      }
+    }
+  }
+  return null;
+}
+
 function displacedProfiles(catalog, profiles) {
   const selected = new Set(profiles);
   const groups = new Set(profiles.map((name) => catalog.profiles[name]?.exclusiveGroup).filter(Boolean));
@@ -652,7 +682,7 @@ function displacedProfiles(catalog, profiles) {
   );
 }
 
-function buildCleanupPlan(catalog, profiles, installed, targetAgents) {
+function buildProfileCleanupPlan(catalog, profiles, installed, targetAgents, selectedEntries) {
   if (targetAgents.length === 0) return [];
   const displaced = displacedProfiles(catalog, profiles);
   if (displaced.size === 0) return [];
@@ -661,21 +691,62 @@ function buildCleanupPlan(catalog, profiles, installed, targetAgents) {
     const conflicting = entry.profiles.filter((profile) => displaced.has(profile));
     if (conflicting.length === 0) return [];
     const protectedProfiles = entry.profiles.filter((profile) => !displaced.has(profile));
+    const groups = new Set(conflicting.map(p => catalog.profiles[p].exclusiveGroup));
+    const replacements = selectedEntries.filter(e => e.profiles.some(p => profiles.includes(p) && groups.has(catalog.profiles[p].exclusiveGroup)));
+    // An empty replacement profile intentionally removes its old managed set.
+    const replacementAgents = new Set((replacements.length ? replacements.flatMap(e => resolveAgents(e, targetAgents)) : targetAgents).map(normalizeAgent));
+    const peerAgents = new Set(resolveAgents(entry, targetAgents).map(normalizeAgent));
+    const candidateAgents = targetAgents.filter(a => replacementAgents.has(normalizeAgent(a)) && peerAgents.has(normalizeAgent(a)));
     return entry.names.flatMap((name) => {
       const skill = { ...entry, name };
-      if (!installedForAgents(installed, skill, targetAgents)) return [];
+      const agents = candidateAgents.filter(agent => installedForAgents(installed, skill, [agent]));
+      if (!agents.length) return [];
       if (protectedProfiles.length > 0) {
         return [{ skill, action: "keep", reason: `also managed by protected profiles: ${protectedProfiles.join(", ")}` }];
       }
       if (isLocalSource(entry.package)) {
         return [{ skill, action: "skip", reason: `local source cleanup is disabled: ${entry.package}` }];
       }
-      return [{ skill, action: "remove", reason: `managed only by displaced profiles: ${conflicting.join(", ")}` }];
+      const conflict = installedSourceConflict(skill, installed, agents);
+      if (conflict) return [{ skill, agents, action: "blocked", reason: conflict }];
+      const localOnlyAgents = agents.filter(agent => [...groups].some(group => {
+        const alternatives = replacements.filter(replacement =>
+          replacement.profiles.some(profile => profiles.includes(profile) && catalog.profiles[profile].exclusiveGroup === group)
+          && resolveAgents(replacement, targetAgents).some(target => normalizeAgent(target) === normalizeAgent(agent)));
+        return alternatives.length > 0 && alternatives.every(replacement => isLocalSource(replacement.package));
+      }));
+      if (localOnlyAgents.length) {
+        return [{ skill, agents, action: "blocked", reason: `replacement has only local sources for ${localOnlyAgents.join(", ")}` }];
+      }
+      return [{ skill, agents, action: "remove", reason: `managed only by displaced profiles: ${conflicting.join(", ")}` }];
     });
   });
 }
 
+function buildCleanupPlan(catalog, profiles, installed, targetAgents, selection = selectSkillEntries(catalog, profiles)) {
+  const result = new Map(buildProfileCleanupPlan(catalog, profiles, installed, targetAgents, selection.entries).map(item => [`${item.skill.scope}:${item.skill.name.toLowerCase()}`, item]));
+  for (const [group, { entry: selected }] of selection.groups) {
+    const selectedAgents = new Set(resolveAgents(selected, targetAgents).map(normalizeAgent));
+    for (const entry of catalog.skills.filter(e => e.exclusiveGroup === group && e !== selected)) {
+      const peerAgents = new Set(resolveAgents(entry, targetAgents).map(normalizeAgent));
+      const agents = targetAgents.filter(a => selectedAgents.has(normalizeAgent(a)) && peerAgents.has(normalizeAgent(a)));
+      for (const skill of expandSkillEntries([entry])) {
+        const key = `${skill.scope}:${skill.name.toLowerCase()}`;
+        // Entry-level conflicts supersede profile cleanup, including its target set.
+        result.delete(key);
+        if (!installedForAgents(installed, skill, agents)) continue;
+        const local = isLocalSource(entry.package);
+        const conflict = local ? null : installedSourceConflict(skill, installed, agents);
+        result.set(key, { skill, agents, action: local ? "skip" : conflict ? "blocked" : "remove", reason: conflict || `entry group ${group}: selected ${selected.names.join(", ")}${local ? "; local source cleanup is disabled" : ""}` });
+      }
+    }
+  }
+  return [...result.values()];
+}
+
 function assessSkill(skill, installed, detectedAgents) {
+  const conflict = installedSourceConflict(skill, installed);
+  if (conflict) return { action: "blocked", reason: conflict };
   const matches = installed.filter(
     (entry) => entry.scope === skill.scope && String(entry.name).toLowerCase() === skill.name.toLowerCase(),
   );
@@ -688,8 +759,9 @@ function assessSkill(skill, installed, detectedAgents) {
   return null;
 }
 
-function buildPlan(catalog, profiles, installed, detectedAgents) {
-  return expandCatalog(catalog, profiles).map((skill) => {
+function buildPlan(catalog, profiles, installed, detectedAgents, { choices = [], allowConflicts = false, selection } = {}) {
+  const skills = allowConflicts ? expandCatalog(catalog, profiles) : expandSkillEntries((selection ?? selectSkillEntries(catalog, profiles, choices)).entries);
+  return skills.map((skill) => {
     if (isLocalSource(skill.package)) {
       return { skill, action: "skip", reason: `local source is not portable: ${skill.package}` };
     }
@@ -703,13 +775,8 @@ function printPlan(profiles, plan, cleanupPlan = [], cleanupAgents = []) {
   console.log(`Profiles: ${profiles.join(", ")}`);
   if (cleanupAgents.length > 0) console.log(`Cleanup agents: ${cleanupAgents.join(", ")}`);
   if (plan.length === 0 && cleanupPlan.length === 0) console.log("Catalog selection is empty.");
-  for (const item of plan) {
-    const scope = item.skill.scope === "global" ? "global" : "project";
-    console.log(`[${item.action.toUpperCase()}] ${item.skill.name} (${scope}) - ${item.reason}`);
-  }
-  for (const item of cleanupPlan) {
-    const scope = item.skill.scope === "global" ? "global" : "project";
-    console.log(`[${item.action.toUpperCase()}] ${item.skill.name} (${scope}) - ${item.reason}`);
+  for (const item of [...plan, ...cleanupPlan]) {
+    console.log(`[${item.action.toUpperCase()}] ${item.skill.name} (${item.skill.scope}) - ${item.reason}`);
   }
 }
 
@@ -758,22 +825,25 @@ async function planCommand(args, dependencies = {}) {
   const catalog = dependencies.catalog ? validateCatalog(dependencies.catalog) : await loadCatalog();
   const syncing = ["plan", "sync"].includes(args.command);
   const profiles = selectProfiles(catalog, args.profiles, args.allProfiles, { allowConflicts: !syncing });
-  const selected = expandCatalog(catalog, profiles);
+  const selection = syncing ? selectSkillEntries(catalog, profiles, args.choices) : null;
+  const selected = selection ? expandSkillEntries(selection.entries) : expandCatalog(catalog, profiles);
   const selectsExclusiveProfile = syncing && profiles.some((profile) => catalog.profiles[profile].exclusiveGroup);
-  const needsDetection = selectsExclusiveProfile || selected.some(
+  const hasEntrySelection = Boolean(selection?.groups.size);
+  const needsDetection = selectsExclusiveProfile || hasEntrySelection || selected.some(
     (skill) => !isLocalSource(skill.package) && skill.agents[0] === "detected",
   );
   const detectedAgents = needsDetection ? (dependencies.detectActiveAgents || detectActiveAgents)(args.agents) : [];
   if (needsDetection) console.log(`Active agent: ${detectedAgents.join(", ")}`);
   const installed = (dependencies.listInstalled || listInstalled)();
-  const cleanupAgents = selectsExclusiveProfile ? detectedAgents : [];
+  const cleanupAgents = selectsExclusiveProfile || hasEntrySelection ? detectedAgents : [];
   const plan = args.command === "remove"
     ? buildExplicitRemovalPlan(selected, installed, detectedAgents)
-    : buildPlan(catalog, profiles, installed, detectedAgents);
-  const cleanupPlan = syncing ? buildCleanupPlan(catalog, profiles, installed, cleanupAgents) : [];
+    : buildPlan(catalog, profiles, installed, detectedAgents, { selection, allowConflicts: !syncing });
+  const cleanupPlan = syncing ? buildCleanupPlan(catalog, profiles, installed, cleanupAgents, selection) : [];
   console.log(`Skill ${args.command === "plan" ? "sync" : args.command} plan:`);
+  for (const [group, { entry, source }] of selection?.groups ?? []) console.log(`Entry group ${group}: ${entry.names.join(", ")} (${source})`);
   printPlan(profiles, plan, cleanupPlan, cleanupAgents);
-  return { catalog, profiles, plan, cleanupPlan, detectedAgents, cleanupAgents };
+  return { catalog, profiles, plan, cleanupPlan, detectedAgents, cleanupAgents, hasEntrySelection };
 }
 
 function buildExplicitRemovalPlan(selected, installed, detectedAgents) {
@@ -781,9 +851,10 @@ function buildExplicitRemovalPlan(selected, installed, detectedAgents) {
     const membership = `profiles: ${skill.profiles.join(", ")}`;
     if (isLocalSource(skill.package)) return { skill, action: "skip", reason: `local source removal is disabled; ${membership}` };
     const agents = resolveAgents(skill, detectedAgents).filter((agent) => installedForAgents(installed, skill, [agent]));
+    const conflict = installedSourceConflict(skill, installed, agents);
     return {
-      skill, agents, action: agents.length ? "remove" : "skip",
-      reason: `${agents.length ? `explicit removal from ${agents.join(", ")}` : "not installed for selected agents"}; ${membership}`,
+      skill, agents, action: conflict ? "blocked" : agents.length ? "remove" : "skip",
+      reason: `${conflict || (agents.length ? `explicit removal from ${agents.join(", ")}` : "not installed for selected agents")}; ${membership}`,
     };
   });
 }
@@ -839,19 +910,19 @@ async function applySyncPlan(syncPlan, args, dependencies = {}) {
   const readInstalled = dependencies.listInstalled || listInstalled;
   const { profiles, plan, cleanupPlan, detectedAgents, cleanupAgents } = syncPlan;
   const actions = plan.filter((item) => item.action === "install");
-  const blocked = plan.filter((item) => item.action === "blocked");
+  const blocked = [...plan, ...cleanupPlan].filter((item) => item.action === "blocked");
   const skipped = plan.filter((item) => item.action === "skip");
   const removals = cleanupPlan.filter((item) => item.action === "remove");
-  if (blocked.length > 0) throw new Error("Sync blocked by unreviewed catalog entries");
+  if (!args.yes) {
+    console.log("Repeat with --yes to execute this plan.");
+    return { failed: false, cancelled: false, preview: true, residual: [] };
+  }
+  if (blocked.length > 0) throw new Error(`Operation blocked: ${blocked.map(item => `${item.skill.name}: ${item.reason}`).join("; ")}`);
+  if ((syncPlan.hasEntrySelection || removals.length > 0) && skipped.some(item => item.skill.exclusiveGroup || item.skill.required)) throw new Error("Sync blocked: selected required skill or entry alternative is a local source and cannot be established");
   if (actions.length === 0 && removals.length === 0) {
     if (skipped.length > 0) console.log(`Skipped local skills: ${skipped.map((item) => item.skill.name).join(", ")}`);
     console.log("Nothing to install or remove.");
     return { failed: false, cancelled: false, residual: [] };
-  }
-
-  if (!args.yes) {
-    console.log("Repeat with --yes to execute this plan.");
-    return { failed: false, cancelled: false, preview: true, residual: [] };
   }
 
   const batches = buildInstallBatches(actions, detectedAgents);
@@ -878,6 +949,14 @@ async function applySyncPlan(syncPlan, args, dependencies = {}) {
     return { failed: true, cancelled: false, residual: removals, installFailures: failures };
   }
 
+  if (syncPlan.hasEntrySelection || removals.length > 0) {
+    const installedAfterInstall = readInstalled();
+    const missing = plan.filter(item => item.action !== "skip" && assessSkill(item.skill, installedAfterInstall, detectedAgents));
+    if (missing.length) {
+      console.log(`Cleanup skipped: replacement verification failed for ${missing.map(item => item.skill.name).join(", ")}`);
+      return { failed: true, cancelled: false, residual: removals, verificationFailures: missing.map(item => item.skill.name) };
+    }
+  }
   const commandFailures = [];
   for (const batch of buildRemovalBatches(removals, cleanupAgents)) {
     console.log(`Removing ${batch.names.join(", ")} from ${batch.agents.join(", ")}...`);
@@ -888,7 +967,7 @@ async function applySyncPlan(syncPlan, args, dependencies = {}) {
   }
 
   const installedAfterCleanup = removals.length > 0 ? readInstalled() : [];
-  const residual = removals.filter((item) => installedForAgents(installedAfterCleanup, item.skill, cleanupAgents));
+  const residual = removals.filter((item) => installedForAgents(installedAfterCleanup, item.skill, item.agents ?? cleanupAgents));
   const removedCount = removals.length - residual.length;
   if (removals.length > 0) console.log(`Removed conflicting skills: ${removedCount}/${removals.length}`);
   console.log(`${args.command === "install" ? "Install" : "Sync"} ${commandFailures.length || residual.length ? "failed" : "complete"} for profiles: ${profiles.join(", ")}`);
@@ -910,6 +989,8 @@ async function applyExplicitRemovalPlan(operationPlan, args, dependencies = {}) 
     console.log("Repeat with --yes to execute this plan.");
     return { failed: false, preview: true };
   }
+  const blocked = operationPlan.plan.filter(item => item.action === "blocked");
+  if (blocked.length) throw new Error(`Removal blocked: ${blocked.map(item => `${item.skill.name}: ${item.reason}`).join("; ")}`);
   const executeSkills = dependencies.runSkills || runSkills;
   const readInstalled = dependencies.listInstalled || listInstalled;
   const batches = buildRemovalBatches(removals, operationPlan.detectedAgents);
@@ -945,8 +1026,9 @@ async function executeSkillOperation(args, dependencies = {}) {
     : applySyncPlan(operationPlan, args, dependencies);
 }
 
-function buildAuditFindings(catalog, profiles, installed, detectedAgents, { profileAudit = false } = {}) {
-  const expected = expandCatalog(catalog, profiles);
+function buildAuditFindings(catalog, profiles, installed, detectedAgents, { profileAudit = false, choices = [], selection: resolvedSelection } = {}) {
+  const selection = profileAudit ? resolvedSelection ?? selectSkillEntries(catalog, profiles, choices) : null;
+  const expected = selection ? expandSkillEntries(selection.entries) : expandCatalog(catalog, profiles);
   const local = [];
   const drift = [];
 
@@ -956,13 +1038,13 @@ function buildAuditFindings(catalog, profiles, installed, detectedAgents, { prof
     } else if (!skill.reviewed) drift.push(`[BLOCKED] ${skill.scope}:${skill.name} - source is not reviewed`);
     else {
       const assessment = assessSkill(skill, installed, detectedAgents);
-      if (assessment) drift.push(`[MISSING] ${skill.scope}:${skill.name} - ${assessment.reason}`);
+      if (assessment) drift.push(`[${assessment.action === "blocked" ? "BLOCKED" : "MISSING"}] ${skill.scope}:${skill.name} - ${assessment.reason}`);
     }
   }
 
   if (profileAudit) {
-    const cleanupPlan = buildCleanupPlan(catalog, profiles, installed, detectedAgents);
-    for (const item of cleanupPlan.filter((entry) => entry.action === "remove")) {
+    const cleanupPlan = buildCleanupPlan(catalog, profiles, installed, detectedAgents, selection);
+    for (const item of cleanupPlan.filter((entry) => ["remove", "skip", "blocked"].includes(entry.action))) {
       drift.push(`[CONFLICT] ${item.skill.scope}:${item.skill.name} - ${item.reason}`);
     }
   }
@@ -984,14 +1066,15 @@ async function auditCommand(args) {
   const catalog = await loadCatalog();
   const profileAudit = Boolean(args.profiles);
   const profiles = selectProfiles(catalog, args.profiles, args.allProfiles || !args.profiles, { allowConflicts: !profileAudit });
-  const expected = expandCatalog(catalog, profiles);
+  const selection = profileAudit ? selectSkillEntries(catalog, profiles, args.choices) : null;
+  const expected = selection ? expandSkillEntries(selection.entries) : expandCatalog(catalog, profiles);
   const selectsExclusiveProfile = profileAudit && profiles.some((profile) => catalog.profiles[profile].exclusiveGroup);
-  const needsDetection = selectsExclusiveProfile || expected.some(
+  const needsDetection = selectsExclusiveProfile || Boolean(selection?.groups.size) || expected.some(
     (skill) => !isLocalSource(skill.package) && skill.agents[0] === "detected",
   );
   const detectedAgents = needsDetection ? detectActiveAgents(args.agents) : [];
   if (needsDetection) console.log(`Active agent: ${detectedAgents.join(", ")}`);
-  const { local, drift } = buildAuditFindings(catalog, profiles, listInstalled(), detectedAgents, { profileAudit });
+  const { local, drift } = buildAuditFindings(catalog, profiles, listInstalled(), detectedAgents, { profileAudit, selection });
   local.forEach((line) => console.log(line));
 
   console.log(`Profiles audited: ${profiles.join(", ")}`);
