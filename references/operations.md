@@ -8,8 +8,8 @@ Examples below use repository-relative script paths. When this Skill is installe
 
 ```shell
 node scripts/manage-skills.mjs doctor
-node scripts/manage-skills.mjs plan [--profile core,superpowers | --all] [--agent codex]
-node scripts/manage-skills.mjs audit [--profile core,superpowers | --all] [--agent codex]
+node scripts/manage-skills.mjs plan [--profile core,coding-superpowers | --all] [--agent codex]
+node scripts/manage-skills.mjs audit [--profile core,coding-superpowers | --all] [--agent codex]
 node scripts/manage-skills.mjs sources [skill ...] [--json] [--verify-remote]
 ```
 
@@ -56,7 +56,7 @@ node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 
 Every operation requires exactly one of `--profile <a,b>`, `--plugin <a,b>`, or `--all`; the selectors are mutually exclusive and omission is an error. Names are comma-separated, trimmed, deduplicated, and selected plugins retain catalog order. The manager never falls back to `defaultProfiles`.
 
-The plugin profiles `gitnexus`, `codegraph` (default), and `codebase-memory-mcp` share exclusive group `codegraph`, independently of the `coding` workflow group. For example, `plan --profile superpowers,codegraph` selects CodeGraph while retaining a compatible workflow choice. The plugin manager does not install the workflow's Skills; use the Skill manager separately. `plan` and `sync` reject conflicting profile or plugin selections and their `--all` selects ordinary/default-profile plugins (currently CodeGraph). Install/update/remove allow conflicting members together and their `--all` selects every plugin.
+The plugin profiles `gitnexus`, `codegraph` (default), and `codebase-memory-mcp` share exclusive group `codegraph`, independently of the `coding` workflow group. For example, `plan --profile coding-superpowers,codegraph` selects CodeGraph while retaining a compatible workflow choice. The plugin manager does not install the workflow's Skills; use the Skill manager separately. `plan` and `sync` reject conflicting profile or plugin selections and their `--all` selects ordinary/default-profile plugins (currently CodeGraph). Install/update/remove allow conflicting members together and their `--all` selects every plugin.
 
 Profile cleanup requires a uniquely determined replacement profile. Selecting only a shared plugin whose memberships span alternatives does not silently choose one or trigger that group's cleanup; select a specific profile or a compatible single-profile plugin to make the choice explicit.
 
@@ -88,8 +88,8 @@ Install/remove and plugin update still act on all matching entries, allow altern
 
 ```shell
 node scripts/manage-skills.mjs sync
-node scripts/manage-skills.mjs sync --profile core,superpowers
-node scripts/manage-skills.mjs sync --profile core,superpowers --agent codex --yes
+node scripts/manage-skills.mjs sync --profile core,coding-superpowers
+node scripts/manage-skills.mjs sync --profile core,coding-superpowers --agent codex --yes
 node scripts/manage-skills.mjs sync --all --agent codex --yes
 ```
 
@@ -109,9 +109,9 @@ For skipped local replacements, distinguish these cases for each exclusive group
 ## Additive Skill installation and explicit removal
 
 ```powershell
-node scripts/manage-skills.mjs install --profile mattpocock,superpowers
+node scripts/manage-skills.mjs install --profile coding-mattpocock,coding-superpowers
 node scripts/manage-skills.mjs install --all --yes
-node scripts/manage-skills.mjs remove --profile superpowers
+node scripts/manage-skills.mjs remove --profile coding-superpowers
 node scripts/manage-skills.mjs remove --all --yes
 ```
 

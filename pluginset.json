@@ -5,13 +5,17 @@
     "core": {
       "description": "Skills installed in every environment"
     },
-    "mattpocock": {
+    "coding-mattpocock": {
       "description": "Lightweight software development workflow",
       "exclusiveGroup": "coding",
       "defaultInExclusiveGroup": true
     },
-    "superpowers": {
+    "coding-superpowers": {
       "description": "Superpowers-driven software development workflow",
+      "exclusiveGroup": "coding"
+    },
+    "coding-ub-mode": {
+      "description": "Uncle Bob's software engineering principles and quality gates",
       "exclusiveGroup": "coding"
     },
     "gitnexus": {
@@ -118,7 +122,7 @@
         "wizard",
         "writing-for-agents"
       ],
-      "profiles": ["mattpocock"],
+      "profiles": ["coding-mattpocock"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -127,7 +131,7 @@
     {
       "package": "forrestchang/andrej-karpathy-skills",
       "names": ["karpathy-guidelines"],
-      "profiles": ["mattpocock"],
+      "profiles": ["coding-mattpocock"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -151,7 +155,16 @@
         "writing-plans",
         "writing-skills"
       ],
-      "profiles": ["superpowers"],
+      "profiles": ["coding-superpowers"],
+      "scope": "global",
+      "agents": ["detected"],
+      "required": false,
+      "reviewed": true
+    },
+    {
+      "package": "unclebob/ub-mode",
+      "names": ["ub-mode"],
+      "profiles": ["coding-ub-mode"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -169,7 +182,7 @@
     {
       "package": "anthropics/skills",
       "names": ["frontend-design"],
-      "profiles": ["mattpocock", "superpowers"],
+      "profiles": ["coding-mattpocock", "coding-superpowers", "coding-ub-mode"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,
@@ -178,7 +191,7 @@
     {
       "package": "openai/skills",
       "names": ["playwright"],
-      "profiles": ["mattpocock", "superpowers"],
+      "profiles": ["coding-mattpocock", "coding-superpowers", "coding-ub-mode"],
       "scope": "global",
       "agents": ["detected"],
       "required": false,

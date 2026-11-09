@@ -57,7 +57,7 @@ The shipped `docs` profile contains `op7418/humanizer-zh` and `LifelongLazyLearn
 
 ### Exclusive plugin profiles
 
-The shipped plugins each use their own same-name profile: `gitnexus`, `codegraph`, and `codebase-memory-mcp`. All three have `exclusiveGroup: "codegraph"`; only profile `codegraph` has `defaultInExclusiveGroup: true`. The existing `mattpocock` and `superpowers` profiles remain in the separate `coding` group. Selecting a workflow alone no longer selects a plugin.
+The shipped plugins each use their own same-name profile: `gitnexus`, `codegraph`, and `codebase-memory-mcp`. All three have `exclusiveGroup: "codegraph"`; only profile `codegraph` has `defaultInExclusiveGroup: true`. The `coding-mattpocock`, `coding-superpowers`, and `coding-ub-mode` profiles belong to the separate `coding` group, defaulting to `coding-mattpocock`. `defaultProfiles` remains `["core"]`. Selecting a workflow alone no longer selects a plugin.
 
 Plugin profiles use the same group schema as Skill profiles. Multiple memberships mean the plugin belongs to any listed profile, not that every profile must be selected. A shared plugin alone does not identify a unique replacement profile; select a profile or a compatible single-profile plugin when replacement is intended. See [operations.md](operations.md#external-plugin-lifecycle) for lifecycle and full-uninstall behavior.
 
@@ -137,6 +137,8 @@ Command arrays may mix strings and platform maps. Nested arrays and empty arrays
 ## Shared entries
 
 Shared Skills belong to multiple profiles in one catalog entry, for example `"profiles": ["coding-a", "coding-b"]`. Do not duplicate a Skill entry: names remain unique per scope. Profile sharing protects against profile-only cleanup; entry exclusivity remains independent. Command-specific selection and audit behavior are in operations.
+
+The shipped `frontend-design` and `playwright` entries are shared by all three coding profiles. `coding-ub-mode` adds only the `ub-mode` Skill from `unclebob/ub-mode`; its companion tools `crapper`, `dryer`, and `mutator` are not installed by this Skill catalog.
 
 ## Local sources
 

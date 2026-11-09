@@ -1254,7 +1254,7 @@ test("current catalog defines the approved plugins without project index command
   assert.equal(current.profiles.codegraph.defaultInExclusiveGroup, true);
   assert.equal(Object.hasOwn(current.profiles, "codebase-memory"), false);
   assert.deepEqual(
-    selectPlugins(current, parsePluginArgs(["plan", "--profile", "superpowers,codegraph"])).map((entry) => entry.name),
+    selectPlugins(current, parsePluginArgs(["plan", "--profile", "coding-superpowers,codegraph"])).map((entry) => entry.name),
     ["codegraph"],
   );
   const serialized = JSON.stringify(current.plugins);

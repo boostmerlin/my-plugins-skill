@@ -26,7 +26,7 @@ For entry alternatives, show the manager-specific group name, selected entry (al
 
 **23 个 Skill · 9 个安装批次 · 3 个待清理 · 全局同步至 `codex`**
 
-Profile：`core` · `superpowers`
+Profile：`core` · `coding-superpowers`
 
 | 动作 | 来源 | Skill |
 |---|---|---|
@@ -59,7 +59,7 @@ Lead with installed versus planned counts. Summarize profile results in a table 
 | Profile | 结果 |
 |---|---:|
 | `core` | ✓ 完成 |
-| `superpowers` | ✓ 完成 |
+| `coding-superpowers` | ✓ 完成 |
 
 ### 审计
 

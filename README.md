@@ -53,19 +53,19 @@ Agent 会选择所有普通 Profile，以及每个互斥组中配置的默认 Pr
 ### 同步到指定 Profile
 
 ```text
-使用 $my-plugins-skill 将当前环境同步到 core 和 superpowers Profile。
+使用 $my-plugins-skill 将当前环境同步到 core 和 coding-superpowers Profile。
 ```
 
 ### 只查看计划
 
 ```text
-使用 $my-plugins-skill 查看同步到 core 和 superpowers Profile 的计划，不执行修改。
+使用 $my-plugins-skill 查看同步到 core 和 coding-superpowers Profile 的计划，不执行修改。
 ```
 
 ### 审计指定 Profile 环境
 
 ```text
-使用 $my-plugins-skill 审计当前 superpowers Profile 环境。
+使用 $my-plugins-skill 审计当前 coding-superpowers Profile 环境。
 ```
 
 ### 查找新的 Skill
@@ -145,7 +145,7 @@ node scripts/manage_plugins.mjs update --plugin codegraph
 node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 ```
 
-三个插件分别使用同名 Profile：`gitnexus`、`codegraph`、`codebase-memory-mcp`，属于 `codegraph` 互斥组，默认选中 `codegraph`。工作流 `mattpocock` 与 `superpowers` 属于独立的 `coding` 组，可以选择一个工作流搭配一个插件；选择工作流本身不会选中插件。
+三个插件分别使用同名 Profile：`gitnexus`、`codegraph`、`codebase-memory-mcp`，属于 `codegraph` 互斥组，默认选中 `codegraph`。工作流 `coding-mattpocock`、`coding-superpowers` 与 `coding-ub-mode` 属于独立的 `coding` 组，可以选择一个工作流搭配一个插件；选择工作流本身不会选中插件。
 
 插件默认识别当前会话，也支持显式目标；当前配置只录入已核对的 Codex `agentMap` 映射。`--detect-installed` 用于明确面向本机已安装 Agent 的请求，不能与 `--agent` 合用。插件卸载可能移除共享 CLI 并影响其他 Agent，计划会说明范围。本管理器不初始化、刷新或删除项目索引；`codebase-memory-mcp` 的上游卸载仍保留索引删除提示。
 
@@ -153,9 +153,17 @@ node scripts/manage_plugins.mjs remove --plugin gitnexus --yes
 
 ## 当前配置
 
-默认初始化只选择 `core`。`mattpocock` Profile 收录其正式套件的 25 个 Skill，按上游 v1.2.3（commit `959a8e9f1edc3adbe2f7e3054bb6fbefa6696260`）的 [发布清单](https://github.com/mattpocock/skills/blob/959a8e9f1edc3adbe2f7e3054bb6fbefa6696260/.claude-plugin/plugin.json) 核对，覆盖 engineering 与 productivity，不包含 misc 和 in-progress 项。该版本仅是清单核对基准，安装来源 `mattpocock/skills` 没有锁定版本。旧名称 `writing-great-skills` 已改为 `writing-for-agents`。
+默认初始化只选择 `core`。`coding` 互斥组包含 `coding-mattpocock`、`coding-superpowers` 与 `coding-ub-mode`，组内默认仍为 `coding-mattpocock`。旧 Profile 名称 `mattpocock` 和 `superpowers` 已被替换，不保留别名。
 
-选择 `mattpocock` 或同步全部兼容 Profile 时才会安装这套 Skill。安装后，每个项目在使用工程工作流前先运行 `setup-matt-pocock-skills`，配置 issue tracker、分诊标签与文档位置。完整条目见 [pluginset.json](pluginset.json)。
+`coding-mattpocock` Profile 收录其正式套件的 25 个 Skill，按上游 v1.2.3（commit `959a8e9f1edc3adbe2f7e3054bb6fbefa6696260`）的 [发布清单](https://github.com/mattpocock/skills/blob/959a8e9f1edc3adbe2f7e3054bb6fbefa6696260/.claude-plugin/plugin.json) 核对，覆盖 engineering 与 productivity，不包含 misc 和 in-progress 项。该版本仅是清单核对基准，安装来源 `mattpocock/skills` 没有锁定版本。旧名称 `writing-great-skills` 已改为 `writing-for-agents`。
+
+选择 `coding-mattpocock` 或同步全部兼容 Profile 时才会安装这套 Skill。安装后，每个项目在使用工程工作流前先运行 `setup-matt-pocock-skills`，配置 issue tracker、分诊标签与文档位置。完整条目见 [pluginset.json](pluginset.json)。
+
+`coding-ub-mode` 收录 `unclebob/ub-mode` 的核心工作流 Skill `ub-mode`。三个编程 Profile 共用已有的 `frontend-design` 和 `playwright`。配套的 `crapper`、`dryer`、`mutator` 是独立工具，不随此 Skill 清单安装。查看该方案的同步计划：
+
+```powershell
+node scripts/manage-skills.mjs plan --profile coding-ub-mode
+```
 
 ### 同一 Profile 内选择替代工具
 
@@ -173,8 +181,8 @@ node scripts/manage-skills.mjs audit --profile docs --choose chinese-humanizer=q
 ### 单独安装和卸载 Skill
 
 ```powershell
-node scripts/manage-skills.mjs install --profile mattpocock,superpowers --yes
-node scripts/manage-skills.mjs remove --profile superpowers --yes
+node scripts/manage-skills.mjs install --profile coding-mattpocock,coding-superpowers --yes
+node scripts/manage-skills.mjs remove --profile coding-superpowers --yes
 ```
 
 这两个命令不会自动清理其他方案。显式卸载会包含所选 Profile 中的共享 Skill，计划会列出其归属；本地来源跳过，未纳管项保留。Skill 卸载必须指定 `--profile` 或 `--all`。
